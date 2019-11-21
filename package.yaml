@@ -1,0 +1,28 @@
+
+name:                rowar
+version:             0.1.0.0
+github:              "YPares/rowar"
+license:             BSD3
+author:              "Yves Parès"
+maintainer:          "yves.pares@gmail.com"
+copyright:           "2019 Yves Parès"
+
+extra-source-files:
+- README.md
+- ChangeLog.md
+
+# Metadata used when publishing your package
+synopsis:            Composing Applicatives, Monads, Comonads and Arrows into Arrows
+category:            Control
+
+# To avoid duplicated efforts in documentation and dealing with the
+# complications of embedding Haddock markup inside cabal files, it is
+# common to point users to the README.md file.
+description:         Please see the README on GitHub at <https://github.com/YPares/rowar#readme>
+
+dependencies:
+- base >= 4.7 && < 5
+- bifunctors
+
+library:
+  source-dirs: src
