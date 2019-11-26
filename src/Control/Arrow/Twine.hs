@@ -9,9 +9,15 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE DerivingVia #-}
 
-module Control.Arrow.Rowar
+module Control.Arrow.Twine
   ( Product(..)
   , Tannen(..)
+  , Twine_(..)
+  , Twine, LooseTwine
+  , Strand, Strands, TwineRec
+  , StrandRunner(..)
+  , tightenTwine, loosenTwine
+  , type (~>)
   )
 where
 
