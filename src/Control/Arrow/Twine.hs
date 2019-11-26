@@ -25,8 +25,11 @@ import Control.Category
 import Control.Arrow
 
 import Control.Monad.Reader
+import Data.Bifunctor
 import Data.Bifunctor.Tannen
 import Data.Bifunctor.Product
+import Data.Profunctor
+import Data.Profunctor.Cayley
 import Data.Functor.Identity  -- Needed by the deriving via machinery
 import Data.Typeable
 import Data.Vinyl hiding ((<+>))
@@ -62,10 +65,12 @@ newtype StrandRunner (sup::Strand) (strand::(Symbol,Strand)) = StrandRunner
 -- Note that if @sup@ is maintained polymorphic, then this corresponds to the
 -- final encoding of the free arrow construction.
 newtype Twine (record::TwineRec) (strands::Strands) (sup::Strand) a b =
-  Twine
-  { runTwine :: record (StrandRunner sup) strands -> sup a b }
-  deriving (Category, Arrow, ArrowChoice, ArrowLoop, ArrowZero, ArrowPlus)
+  Twine { runTwine :: record (StrandRunner sup) strands -> sup a b }
+  deriving (Category, Arrow, ArrowChoice, ArrowLoop, ArrowZero, ArrowPlus
+           ,Bifunctor)
     via Reader (record (StrandRunner sup) strands) `Tannen` sup
+  deriving (Profunctor, Strong, Choice)
+    via Reader (record (StrandRunner sup) strands) `Cayley` sup
 
 -- | A 'Twine' that is "tight", meaning you cannot add new 'Strand's to it
 type TightTwine = Twine ARec
