@@ -12,8 +12,8 @@
 module Control.Arrow.Twine
   ( Product(..)
   , Tannen(..)
-  , Twine_(..)
-  , Twine, LooseTwine
+  , Twine(..)
+  , TightTwine, LooseTwine
   , Strand, Strands, TwineRec
   , StrandRunner(..)
   , tightenTwine, loosenTwine
@@ -61,17 +61,20 @@ newtype StrandRunner (sup::Strand) (strand::(Symbol,Strand)) = StrandRunner
 --
 -- Note that if @sup@ is maintained polymorphic, then this corresponds to the
 -- final encoding of the free arrow construction.
-newtype Twine_ (record::TwineRec) (strands::Strands) (sup::Strand) a b =
+newtype Twine (record::TwineRec) (strands::Strands) (sup::Strand) a b =
   Twine
   { runTwine :: record (StrandRunner sup) strands -> sup a b }
   deriving (Category, Arrow, ArrowChoice, ArrowLoop, ArrowZero, ArrowPlus)
     via Reader (record (StrandRunner sup) strands) `Tannen` sup
 
-type Twine = Twine_ ARec
-type LooseTwine = Twine_ Rec
+-- | A 'Twine' that is "tight", meaning you cannot add new 'Strand's to it
+type TightTwine = Twine ARec
 
-tightenTwine :: LooseTwine s sup a b -> Twine s sup a b
+-- | A 'Twine' that is "loose", meaning that you can add new 'Strand's to it
+type LooseTwine = Twine Rec
+
+tightenTwine :: LooseTwine s sup a b -> TightTwine s sup a b
 tightenTwine = undefined
 
-loosenTwine :: Twine s sup a b -> LooseTwine s sup a b
+loosenTwine :: TightTwine s sup a b -> LooseTwine s sup a b
 loosenTwine = undefined
