@@ -81,16 +81,33 @@ instance Category (Twine_ r s Category) where
   id = Twine $ const id
   Twine f . Twine g = Twine $ \r -> f r . g r
 
-instance Category (Twine_ r s Arrow) where  -- Should not need that
-                                            -- duplicate. TODO: Find a better
-                                            -- way
+-- DUPLICATE (TODO: Find a better way)
+instance Category (Twine_ r s Arrow) where
+  id = Twine $ const id
+  Twine f . Twine g = Twine $ \r -> f r . g r
+
+-- DUPLICATE
+instance Category (Twine_ r s ArrowChoice) where
   id = Twine $ const id
   Twine f . Twine g = Twine $ \r -> f r . g r
 
 instance Arrow (Twine_ r s Arrow) where
-  arr a = Twine $ const a
-  first (Twine a) = Twine $ first . a
-  second (Twine a) = Twine $ second . a
+  arr f = Twine $ const $ arr f
+  first (Twine f) = Twine $ first . f
+  second (Twine f) = Twine $ second . f
+  Twine f *** Twine g = Twine $ \r -> f r *** g r
+
+-- DUPLICATE
+instance Arrow (Twine_ r s ArrowChoice) where
+  arr f = Twine $ const $ arr f
+  first (Twine f) = Twine $ first . f
+  second (Twine f) = Twine $ second . f
+  Twine f *** Twine g = Twine $ \r -> f r *** g r
+
+instance ArrowChoice (Twine_ r s ArrowChoice) where
+  left (Twine f) = Twine $ left . f
+  right (Twine f) = Twine $ right . f
+  Twine f ||| Twine g = Twine $ \r -> f r ||| g r
 
 tightenTwine :: LooseTwine s c a b -> Twine s c a b
 tightenTwine = undefined
