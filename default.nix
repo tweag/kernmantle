@@ -25,6 +25,8 @@ overlayHaskell = _:pkgs:
     (pkgs.haskellPackages.override {
       overrides = self: super: rec {
         bifunctors = self.callCabal2nix "bifunctors" bifunctorsSource {};
+        # vinyl hasn't been updated for hspec >= 2.7:
+        vinyl = dontCheck super.vinyl;
       };
       }).extend extendWithSourcePackages;
 };
