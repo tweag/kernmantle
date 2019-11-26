@@ -7,6 +7,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE DerivingVia #-}
 
 module Control.Arrow.Rowar
   ( Product(..)
@@ -17,8 +18,10 @@ where
 import Control.Category
 import Control.Arrow
 
+import Control.Monad.Reader
 import Data.Bifunctor.Tannen
 import Data.Bifunctor.Product
+import Data.Functor.Identity  -- Needed by the deriving via machinery
 import Data.Typeable
 import Data.Vinyl hiding ((<+>))
 import GHC.Exts
@@ -77,29 +80,11 @@ newtype StrandRunner (sup::Strand) (strand::(Symbol,Strand)) = StrandRunner
 newtype Twine_ (record::TwineRec) (strands::Strands) (sup::Strand) a b =
   Twine
   { runTwine :: record (StrandRunner sup) strands -> sup a b }
+  deriving (Category, Arrow, ArrowChoice, ArrowLoop, ArrowZero, ArrowPlus)
+    via Reader (record (StrandRunner sup) strands) `Tannen` sup
+
 type Twine = Twine_ ARec
 type LooseTwine = Twine_ Rec
-
-instance (Category sup) => Category (Twine_ r s sup) where
-  id = Twine $ const id
-  Twine f . Twine g = Twine $ \r -> f r . g r
-
-instance (Arrow sup) => Arrow (Twine_ r s sup) where
-  arr f = Twine $ const $ arr f
-  first (Twine f) = Twine $ first . f
-  second (Twine f) = Twine $ second . f
-  Twine f *** Twine g = Twine $ \r -> f r *** g r
-
-instance (ArrowZero sup) => ArrowZero (Twine_ r s sup) where
-  zeroArrow = Twine $ const zeroArrow
-
-instance (ArrowPlus sup) => ArrowPlus (Twine_ r s sup) where
-  Twine f <+> Twine g = Twine $ \r -> f r <+> g r
-
-instance (ArrowChoice sup) => ArrowChoice (Twine_ r s sup) where
-  left (Twine f) = Twine $ left . f
-  right (Twine f) = Twine $ right . f
-  Twine f ||| Twine g = Twine $ \r -> f r ||| g r
 
 tightenTwine :: LooseTwine s sup a b -> Twine s sup a b
 tightenTwine = undefined
