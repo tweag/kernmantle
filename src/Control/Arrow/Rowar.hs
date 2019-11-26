@@ -20,7 +20,7 @@ import Control.Arrow
 import Data.Bifunctor.Tannen
 import Data.Bifunctor.Product
 import Data.Typeable
-import Data.Vinyl
+import Data.Vinyl hiding ((<+>))
 import GHC.Exts
 import GHC.TypeLits
 
@@ -65,52 +65,44 @@ type family Snd t where
 type f ~> g = forall x y. f x y -> g x y
 
 -- | Runs one strand (* -> * -> * effect) in another
-newtype StrandRunner (ar::Strand) (eff::(Symbol,Strand)) = StrandRunner
-  { runStrand :: Snd eff ~> ar }
+newtype StrandRunner (sup::Strand) (strand::(Symbol,Strand)) = StrandRunner
+  { runStrand :: Snd strand ~> sup }
 
 -- | Constructs a free arrow out of several * -> * -> * effects ('Strand's) that
--- can be interlaced
-newtype Twine_ (record::TwineRec) (effs::Strands) (cnst::Strand -> Constraint) a b =
+-- can be interlaced "on top" of an existing arrow @sup@ (for "support")
+--
+-- Note that it isn't supposed to be an "arrow transformer" (though it could be
+-- used as such), @sup@ in most uses is supposed to remain polymorphic, it is
+-- just exposed so constraints can be added on it
+newtype Twine_ (record::TwineRec) (strands::Strands) (sup::Strand) a b =
   Twine
-  { runTwine ::
-      forall ar. (cnst ar) => record (StrandRunner ar) effs -> ar a b }
+  { runTwine :: record (StrandRunner sup) strands -> sup a b }
 type Twine = Twine_ ARec
 type LooseTwine = Twine_ Rec
 
-instance Category (Twine_ r s Category) where
+instance (Category sup) => Category (Twine_ r s sup) where
   id = Twine $ const id
   Twine f . Twine g = Twine $ \r -> f r . g r
 
--- DUPLICATE (TODO: Find a better way)
-instance Category (Twine_ r s Arrow) where
-  id = Twine $ const id
-  Twine f . Twine g = Twine $ \r -> f r . g r
-
--- DUPLICATE
-instance Category (Twine_ r s ArrowChoice) where
-  id = Twine $ const id
-  Twine f . Twine g = Twine $ \r -> f r . g r
-
-instance Arrow (Twine_ r s Arrow) where
+instance (Arrow sup) => Arrow (Twine_ r s sup) where
   arr f = Twine $ const $ arr f
   first (Twine f) = Twine $ first . f
   second (Twine f) = Twine $ second . f
   Twine f *** Twine g = Twine $ \r -> f r *** g r
 
--- DUPLICATE
-instance Arrow (Twine_ r s ArrowChoice) where
-  arr f = Twine $ const $ arr f
-  first (Twine f) = Twine $ first . f
-  second (Twine f) = Twine $ second . f
-  Twine f *** Twine g = Twine $ \r -> f r *** g r
+instance (ArrowZero sup) => ArrowZero (Twine_ r s sup) where
+  zeroArrow = Twine $ const zeroArrow
 
-instance ArrowChoice (Twine_ r s ArrowChoice) where
+instance (ArrowPlus sup) => ArrowPlus (Twine_ r s sup) where
+  Twine f <+> Twine g = Twine $ \r -> f r <+> g r
+
+instance (ArrowChoice sup) => ArrowChoice (Twine_ r s sup) where
   left (Twine f) = Twine $ left . f
   right (Twine f) = Twine $ right . f
   Twine f ||| Twine g = Twine $ \r -> f r ||| g r
 
-tightenTwine :: LooseTwine s c a b -> Twine s c a b
+tightenTwine :: LooseTwine s sup a b -> Twine s sup a b
 tightenTwine = undefined
 
-loosenTwine :: Twine s c a b -> LooseTwine s c a b
+loosenTwine :: Twine s sup a b -> LooseTwine s sup a b
 loosenTwine = undefined
