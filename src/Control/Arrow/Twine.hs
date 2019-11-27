@@ -7,6 +7,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE DerivingVia #-}
 
 module Control.Arrow.Twine
@@ -48,6 +49,8 @@ type NamedStrand = (Symbol, Strand)
 -- | The kind for records that will contain 'StrandRunner's
 type TwineRec = (NamedStrand -> *) -> [NamedStrand] -> *
 
+type family Fst t where
+  Fst '(a,b) = a
 type family Snd t where
   Snd '(a,b) = b
 
@@ -71,12 +74,17 @@ newtype Twine (record::TwineRec) (strands::[NamedStrand]) (sup::Strand) a b =
     via Reader (record (StrandRunner sup) strands) `Tannen` sup
   deriving (Profunctor, Strong, Choice)
     via Reader (record (StrandRunner sup) strands) `Cayley` sup
-
+ 
 -- | A 'Twine' that is "tight", meaning you cannot add new 'Strand's to it
 type TightTwine = Twine ARec
 
 -- | A 'Twine' that is "loose", meaning that you can add new 'Strand's to it
 type LooseTwine = Twine Rec
+
+-- | Tells whether @strand@ is in a 'Twine'
+type IsInTwine (record::TwineRec) (strands::[NamedStrand]) (sup::Strand) (strand::NamedStrand) =
+  ( HasField record (Fst strand) strands strands (Snd strand) (Snd strand)
+  , RecElemFCtx record (StrandRunner sup) )
 
 tightenTwine :: LooseTwine s sup a b -> TightTwine s sup a b
 tightenTwine = undefined
