@@ -1,7 +1,6 @@
-
-name:                effect-twine
+name:                kernmantle
 version:             0.1.0.0
-github:              "YPares/effect-twine"
+github:              "YPares/kernmantle"
 license:             BSD3
 author:              "Yves Parès"
 maintainer:          "yves.pares@gmail.com"
@@ -18,7 +17,7 @@ category:            Control
 # To avoid duplicated efforts in documentation and dealing with the
 # complications of embedding Haddock markup inside cabal files, it is
 # common to point users to the README.md file.
-description:         Please see the README on GitHub at <https://github.com/YPares/effect-twine#readme>
+description:         Please see the README on GitHub at <https://github.com/YPares/kernmantle#readme>
 
 dependencies:
 - base >= 4.7 && < 5
