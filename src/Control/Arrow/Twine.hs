@@ -14,7 +14,7 @@ module Control.Arrow.Twine
   , Tannen(..)
   , Twine(..)
   , TightTwine, LooseTwine
-  , Strand, Strands, TwineRec
+  , Strand, NamedStrands, TwineRec
   , StrandRunner(..)
   , tightenTwine, loosenTwine
   , type (~>)
@@ -43,10 +43,10 @@ import Prelude hiding (id, (.))
 type Strand = * -> * -> *
 
 -- | The kind for a type-level effect list
-type Strands = [(Symbol, Strand)]
+type NamedStrands = [(Symbol, Strand)]
 
 -- | The kind for records that will contain 'StrandRunner's
-type TwineRec = ((Symbol, Strand) -> *) -> Strands -> *
+type TwineRec = ((Symbol, Strand) -> *) -> NamedStrands -> *
 
 type family Snd t where
   Snd '(a,b) = b
@@ -64,7 +64,7 @@ newtype StrandRunner (sup::Strand) (strand::(Symbol,Strand)) = StrandRunner
 --
 -- Note that if @sup@ is maintained polymorphic, then this corresponds to the
 -- final encoding of the free arrow construction.
-newtype Twine (record::TwineRec) (strands::Strands) (sup::Strand) a b =
+newtype Twine (record::TwineRec) (strands::NamedStrands) (sup::Strand) a b =
   Twine { runTwine :: record (StrandRunner sup) strands -> sup a b }
   deriving (Category, Arrow, ArrowChoice, ArrowLoop, ArrowZero, ArrowPlus
            ,Bifunctor)
