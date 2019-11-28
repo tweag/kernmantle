@@ -1,3 +1,3 @@
-# Changelog for rowar
+# Changelog for kernmantle
 
 ## Unreleased changes
