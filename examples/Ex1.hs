@@ -16,7 +16,7 @@ data a `Console` b where
   PutLine :: String `Console` ()
 
 -- | Run a Console effect in IO
-interpConsole :: (IOStrand `InRope` rope)
+interpConsole :: (rope `Entwines` '[IOStrand])
               => a `Console` b -> a `rope` b
 interpConsole cmd = ioStrand $ case cmd of
   GetLine -> const getLine
@@ -28,7 +28,7 @@ data a `File` b where
   PutFile :: (FilePath, String) `File` ()
 
 -- | Run a File effect in IO
-interpFile :: (IOStrand `InRope` rope)
+interpFile :: (rope `Entwines` '[IOStrand])
             => a `File` b -> a `rope` b
 interpFile cmd = ioStrand $ case cmd of
   GetFile -> readFile

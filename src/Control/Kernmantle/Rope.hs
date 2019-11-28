@@ -34,7 +34,7 @@ module Control.Kernmantle.Rope
   , BinEff, Strand, RopeRec
   , Weaver(..)
   , IOStrand
-  , InRope_(..), InRope
+  , InRope(..), Entwines
   , Label, fromLabel
   , type (~>)
   , (&)
@@ -131,19 +131,22 @@ type LooseRope = Rope Rec
 --   ( HasField record (StrandName strand) strands strands (Snd strand) (Snd strand)
 --   , RecElemFCtx record (Weaver core) )
 
-class InRope_ l eff rope where
+class InRope l eff rope where
   -- | Lifts an effect in the 'Rope'. Performance should be better with a
   -- 'TightRope' than with a 'LooseRope', unless you have very few 'Strand's.
   strand :: Label l -> eff a b -> rope a b
 
 instance ( HasField record l mantle mantle eff eff
          , RecElemFCtx record (Weaver core) )
-  => InRope_ l eff (Rope record mantle core) where
+  => InRope l eff (Rope record mantle core) where
   strand l eff = Rope $ \r -> weaveStrand (rgetf l r) eff
   {-# INLINE strand #-}
 
--- | Tells whether @namedStrand@ is in a 'Rope'
-type strand `InRope` rope = InRope_ (StrandName strand) (StrandEff strand) rope
+-- | Tells whether a collection of @strands@ is in a 'Rope'
+type family rope `Entwines` strands :: Constraint where
+  rope `Entwines` '[] = ()
+  rope `Entwines` ('(name, eff) ': strands ) = ( InRope name eff rope
+                                               , rope `Entwines` strands )
 
 tighten :: LooseRope m core a b -> TightRope m core a b
 tighten = undefined
@@ -183,11 +186,11 @@ untwineIO (Rope f) = runKleisli $ f (Weaver id :& RNil)
 {-# INLINE untwineIO #-}
 
 -- | Lifts an IO effect in the 'IOStrand'
-ioStrand :: (IOStrand `InRope` rope) => (a -> IO b) -> a `rope` b
+ioStrand :: (rope `Entwines` '[IOStrand]) => (a -> IO b) -> a `rope` b
 ioStrand = strand #io . Kleisli
 {-# INLINE ioStrand #-}
 
 -- | Lifts an IO effect with no input in the 'IOStrand'
-ioStrand_ :: (IOStrand `InRope` rope) => IO b -> () `rope` b
+ioStrand_ :: (rope `Entwines` '[IOStrand]) => IO b -> () `rope` b
 ioStrand_ = strand #io . Kleisli . const
 {-# INLINE ioStrand_ #-}
