@@ -134,17 +134,12 @@ loosen :: TightRope m core a b -> LooseRope m core a b
 loosen = undefined
 
 -- | Adds a new effect strand to the mantle of the 'Rope'
-entwine :: (forall x y. StrandEff strand x y -> core x y)
+entwine :: (forall x y. StrandEff strand x y -> LooseRope mantle core x y)
         -> LooseRope (strand ': mantle) core a b
         -> LooseRope mantle core a b
-entwine run (Rope f) = Rope $ \r -> f (Weaver run :& r)
+entwine run (Rope f) = Rope $ \r ->
+  f (Weaver (\eff -> runRope (run eff) r) :& r)
 {-# INLINE entwine #-}
-
--- -- | If the mantle layer is present in the core, we can just remove it
--- joinMantle :: LooseRope mantle (LooseRope mantle core) a b
---            -> LooseRope mantle core a b
--- joinMantle (Rope f) = Rope $ \r -> case f r of (Rope f') -> f' r
--- {-# INLINE joinMantle #-}
 
 -- -- | Change the first effect strand of the 'Rope'
 -- replaceStrand :: (strand1 ~> LooseRope (strand2 ': rest) core)
