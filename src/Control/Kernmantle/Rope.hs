@@ -27,14 +27,14 @@ module Control.Kernmantle.Rope
   , Tannen(..)
   , Rope(..)
   , TightRope, LooseRope
-  , Strand, NamedStrand, RopeRec
+  , BinEff, Strand, RopeRec
   , Weaver(..)
   , Label, fromLabel
   , tighten, loosen
   , type (~>)
  
   , untwine
-  -- , entwine
+  --, entwine
   , strand
   )
 where
@@ -58,33 +58,38 @@ import GHC.OverloadedLabels
 import Prelude hiding (id, (.))
 
 
--- | The kind for all effects of arity 2
-type Strand = * -> * -> *
+-- | The kind for all binary effects. First param is usually an input
+-- (contravariant) of the effect and second one an output (covariant).
+type BinEff = * -> * -> *
 
--- | The kind for a type-level effect list
-type NamedStrand = (Symbol, Strand)
+-- | The kind for a named binary effect. Must remain a tuple because that's what
+-- vinyl expects.
+type Strand = (Symbol, BinEff)
 
-type family StrandName (t::NamedStrand) where
-  StrandName '(a, b) = a
+type family StrandName (t::Strand) where
+  StrandName '(name, eff) = name
 
-type family StrandEff (t::NamedStrand) where
-  StrandEff '(a, b) = b
+type family StrandEff (t::Strand) where
+  StrandEff '(name, eff) = eff
 
--- | The kind for records that will contain 'Weaver's
-type RopeRec = (NamedStrand -> *) -> [NamedStrand] -> *
+-- | The kind for records that will contain 'Weaver's. First type param will
+-- most often be @Weaver someCore@
+type RopeRec = (Strand -> *) -> [Strand] -> *
 
 -- | A natural transformation on type constructors of two arguments.
 type f ~> g = forall x y. f x y -> g x y
 
--- | Weaves one "mantle" strand (* -> * -> * effect) in a "core" strand
-newtype Weaver (core::Strand) (strand::NamedStrand) = Weaver
-  { runStrand :: StrandEff strand ~> core }
+-- | Runs one "mantle" strand (* -> * -> * effect) in a "core" strand. Is
+-- parameterized over a Strand even if it ignores its name internally
+-- because that's what is expect by the 'RopeRec'
+newtype Weaver (core::BinEff) (strand::Strand) = Weaver
+  { weaveStrand :: StrandEff strand ~> core }
 
--- | 'Rope' is a free arrow built out of _several_ arity 2 effects
+-- | 'Rope' is a free arrow built out of _several_ binary effects
 -- (ie. effects with kind * -> * -> *). These effects are called 'Strand's, they
 -- compose the @mantle@, and they can be interlaced "on top" of an existing
 -- @core@ effect.
-newtype Rope (record::RopeRec) (mantle::[NamedStrand]) (core::Strand) a b =
+newtype Rope (record::RopeRec) (mantle::[Strand]) (core::BinEff) a b =
   Rope
     { runRope :: record (Weaver core) mantle -> core a b }
   
@@ -95,7 +100,7 @@ newtype Rope (record::RopeRec) (mantle::[NamedStrand]) (core::Strand) a b =
   deriving (Profunctor, Strong, Choice)
     via Reader (record (Weaver core) mantle) `Cayley` core
 
--- | A with over any core that satisfies some constraints.
+-- | A 'Rope' over any core that satisfies some constraints.
 --
 -- NOTE: Given @core@ is maintained universally quantified, a 'Rope' created
 -- this way corresponds to the final encoding of the free arrow construction.
@@ -107,31 +112,31 @@ type UniRope cst record mantle a b =
 -- 'Strand's.
 type TightRope = Rope ARec
 
--- | A 'Rope' that is "loose", meaning that you can 'entwine' new 'Strand's to
+-- | A 'Rope' that is "loose", meaning you can 'entwine' new 'Strand's to
 -- it. The 'strand' function is @O(n)@ on 'LooseRope's, @n@ being the number of
 -- 'Strand's.
 type LooseRope = Rope Rec
 
--- type IsInRope (record::RopeRec) (strands::[NamedStrand]) (core::Strand) (strand::NamedStrand) =
+-- type IsInRope (record::RopeRec) (strands::[Strand]) (core::BinEff) (strand::Strand) =
 --   ( HasField record (StrandName strand) strands strands (Snd strand) (Snd strand)
 --   , RecElemFCtx record (Weaver core) )
 
--- | Tells whether @strand@ is in a 'Rope'
-type family (namedStrand::NamedStrand) `InRope` twine where
+-- | Tells whether @namedStrand@ is in a 'Rope'
+type family (namedStrand::Strand) `InRope` rope where
   nstrand `InRope` Rope record mantle core =
     ( HasField record (StrandName nstrand) mantle mantle (StrandEff nstrand) (StrandEff nstrand)
-    , RecElemFCtx record (Weaver core) )  
+    , RecElemFCtx record (Weaver core) )
 
-tighten :: LooseRope s core a b -> TightRope s core a b
+tighten :: LooseRope m core a b -> TightRope m core a b
 tighten = undefined
 
-loosen :: TightRope s core a b -> LooseRope s core a b
+loosen :: TightRope m core a b -> LooseRope m core a b
 loosen = undefined
 
--- -- | Adds a new effect strand to the 'Rope' mantle
--- entwine :: (forall s x y. StrandEff nstrand x y -> LooseRope rest s x y)
---         -> LooseRope (nstrand ': rest) (LooseRope rest core) a b
---         -> LooseRope rest core a b
+-- -- | Adds a new effect strand to the mantle of the 'Rope'
+-- entwine :: (forall x y. StrandEff nstrand x y -> LooseRope mantle core x y)
+--         -> LooseRope (nstrand ': mantle) (LooseRope mantle core) a b
+--         -> LooseRope mantle core a b
 -- entwine run (Rope f) = Rope $ \r -> f (Weaver run :& r)
 -- {-# INLINE entwine #-}
 
@@ -146,9 +151,9 @@ untwine :: LooseRope '[] core a b -> core a b
 untwine (Rope f) = f RNil
 {-# INLINE untwine #-}
 
--- | Lift an effect in the 'Rope'. Performance should be better with a
+-- | Lifts an effect in the 'Rope'. Performance should be better with a
 -- 'TightRope' than with a 'LooseRope', unless you have very few 'Strand's.
-strand :: ('(l,strand) `InRope` Rope r s core)
-       => Label l -> strand a b -> Rope r s core a b 
-strand l eff = Rope $ \r -> runStrand (rgetf l r) eff
+strand :: ('(l,strand) `InRope` Rope r m core)
+       => Label l -> strand a b -> Rope r m core a b 
+strand l eff = Rope $ \r -> weaveStrand (rgetf l r) eff
 {-# INLINE strand #-}

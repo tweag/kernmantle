@@ -89,7 +89,12 @@ design (that would require `Monad`/`ArrowApply`).
 `Rope` has the following signature:
 
 ```haskell
-newtype Rope (record::RopeRec) (mantle::[NamedStrand]) (core::Strand) a b
+newtype Rope (record::RopeRec) (mantle::[Strand]) (core::BinEff) a b
+
+-- The kinds used in Rope:
+type BinEff = * -> * -> *
+type Strand = (Symbol, BinEff) -- A strand is a bin effect with a name
+type RopeRec = (Strand -> *) -> [Strand] -> * -- Collects all the methods to run each strand
 ```
 
 It's parameterized over all the effects contained in the `Rope` (that's the
