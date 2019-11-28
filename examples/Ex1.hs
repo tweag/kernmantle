@@ -38,16 +38,19 @@ type ProgArrow requiredStrands a b = forall strands core.
   => TightRope strands core a b
 
 -- | The Arrow program we will want to run
-prog :: ProgArrow '[ '("console",Console), '("file",File) ] String ()
+prog :: ProgArrow '[ '("console",Console), '("warnOutput",Console), '("file",File) ]
+                  String ()
 prog = proc name -> do
   strand #console PutLine -< "Hello, " ++ name ++ ". What file would you like to open?"
   fname <- strand #console GetLine -< ()
   contents <- if fname == ""
-    then strand #console GetLine -< ()
+    then strand #console GetLine <<< strand #warnOutput PutLine -< "Reading from command line"
     else strand #file GetFile -< fname
   strand #console PutLine -< "I read:\n" ++ contents
 
 main = prog & loosen
             & entwine #console interpConsole
+            & entwine #warnOutput interpConsole -- We use a second Console
+                                                -- effect for warnings
             & entwine #file interpFile
             & flip untwineIO "You"
