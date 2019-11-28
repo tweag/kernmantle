@@ -130,10 +130,6 @@ type TightRope = Rope ARec
 -- 'Strand's.
 type LooseRope = Rope Rec
 
--- type IsInRope (record::RopeRec) (strands::[Strand]) (core::BinEff) (strand::Strand) =
---   ( HasField record (StrandName strand) strands strands (Snd strand) (Snd strand)
---   , RecElemFCtx record (Weaver core) )
-
 class InRope l eff rope where
   -- | Lifts an effect in the 'Rope'. Performance should be better with a
   -- 'TightRope' than with a 'LooseRope', unless you have very few 'Strand's.
@@ -175,10 +171,10 @@ entwine _ run (Rope f) = Rope $ \r ->
 {-# INLINE entwine #-}
 
 -- -- | Change the first effect strand of the 'Rope'
--- replaceStrand :: (strand1 ~> LooseRope (strand2 ': rest) core)
---               -> LooseRope (strand1 ': rest) (LooseRope (strand2 ': rest) core) a b
---               -> LooseRope (strand2 ': rest) core a b
--- replaceStrand = undefined
+-- swapStrand :: Label(strand1 ~> LooseRope (strand2 ': rest) core)
+--            -> LooseRope (strand1 ': rest) (LooseRope (strand2 ': rest) core) a b
+--            -> LooseRope (strand2 ': rest) core a b
+-- swapStrand = undefined
 
 -- | Runs a 'Rope' with no strands inside its core strand
 untwine :: LooseRope '[] core a b -> core a b
