@@ -34,7 +34,7 @@ module Control.Kernmantle.Rope
   , type (~>)
  
   , untwine
-  --, entwine
+  , entwine
   , strand
   )
 where
@@ -48,7 +48,7 @@ import Data.Bifunctor.Tannen
 import Data.Bifunctor.Product
 import Data.Profunctor
 import Data.Profunctor.Cayley
-import Data.Functor.Identity  -- Needed by the deriving via machinery
+import Data.Functor.Identity
 import Data.Typeable
 import Data.Vinyl hiding ((<+>))
 import GHC.Exts
@@ -123,8 +123,8 @@ type LooseRope = Rope Rec
 
 -- | Tells whether @namedStrand@ is in a 'Rope'
 type family (namedStrand::Strand) `InRope` rope where
-  nstrand `InRope` Rope record mantle core =
-    ( HasField record (StrandName nstrand) mantle mantle (StrandEff nstrand) (StrandEff nstrand)
+  strand `InRope` Rope record mantle core =
+    ( HasField record (StrandName strand) mantle mantle (StrandEff strand) (StrandEff strand)
     , RecElemFCtx record (Weaver core) )
 
 tighten :: LooseRope m core a b -> TightRope m core a b
@@ -133,12 +133,18 @@ tighten = undefined
 loosen :: TightRope m core a b -> LooseRope m core a b
 loosen = undefined
 
--- -- | Adds a new effect strand to the mantle of the 'Rope'
--- entwine :: (forall x y. StrandEff nstrand x y -> LooseRope mantle core x y)
---         -> LooseRope (nstrand ': mantle) (LooseRope mantle core) a b
---         -> LooseRope mantle core a b
--- entwine run (Rope f) = Rope $ \r -> f (Weaver run :& r)
--- {-# INLINE entwine #-}
+-- | Adds a new effect strand to the mantle of the 'Rope'
+entwine :: (forall x y. StrandEff strand x y -> core x y)
+        -> LooseRope (strand ': mantle) core a b
+        -> LooseRope mantle core a b
+entwine run (Rope f) = Rope $ \r -> f (Weaver run :& r)
+{-# INLINE entwine #-}
+
+-- -- | If the mantle layer is present in the core, we can just remove it
+-- joinMantle :: LooseRope mantle (LooseRope mantle core) a b
+--            -> LooseRope mantle core a b
+-- joinMantle (Rope f) = Rope $ \r -> case f r of (Rope f') -> f' r
+-- {-# INLINE joinMantle #-}
 
 -- -- | Change the first effect strand of the 'Rope'
 -- replaceStrand :: (strand1 ~> LooseRope (strand2 ': rest) core)
