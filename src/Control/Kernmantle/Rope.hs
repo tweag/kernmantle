@@ -62,6 +62,8 @@ import Data.Function ((&))
 import Data.Functor.Identity
 import Data.Typeable
 import Data.Vinyl hiding ((<+>))
+import Data.Vinyl.ARec
+import Data.Vinyl.TypeLevel
 import GHC.Exts
 import GHC.TypeLits
 import GHC.OverloadedLabels
@@ -149,11 +151,15 @@ type family rope `Entwines` strands :: Constraint where
   rope `Entwines` ('(name, eff) ': strands ) = ( InRope name eff rope
                                                , rope `Entwines` strands )
 
-tighten :: LooseRope m core a b -> TightRope m core a b
-tighten = undefined
+-- | Turn a 'LooseRope' into a 'TightRope'
+tighten :: (RecApplicative m, RPureConstrained (IndexableField m) m)
+        => LooseRope m core a b -> TightRope m core a b
+tighten (Rope f) = Rope $ f . fromARec
 
-loosen :: TightRope m core a b -> LooseRope m core a b
-loosen = undefined
+-- | Turn a 'TightRope' into a 'LooseRope'
+loosen :: (NatToInt (RLength m))
+       => TightRope m core a b -> LooseRope m core a b
+loosen (Rope f) = Rope $ f . toARec
 
 -- | Adds a new effect strand to the mantle of the 'Rope'. Users of that
 -- function should normally not place constraints on the core or instanciate
