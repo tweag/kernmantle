@@ -161,7 +161,7 @@ loosen (Rope f) = Rope $ f . toARec
 -- function should normally not place constraints on the core or instanciate
 -- it. Rather, requirement of the execution function should be expressed in
 -- terms of other effects of the @mantle@.
-entwine :: Label name
+entwine :: Label name  -- ^ Give a name to the strand
         -> (binEff ~> LooseRope mantle core) -- ^ The execution function
         -> LooseRope ('(name,binEff) ': mantle) core a b -- ^ The 'Rope' with an extra effect strand
         -> LooseRope mantle core a b -- ^ The rope with the extra effect strand
