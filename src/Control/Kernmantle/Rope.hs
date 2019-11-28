@@ -43,6 +43,7 @@ module Control.Kernmantle.Rope
   , tighten, loosen
   , untwine
   , entwine
+  , mergeStrands
 
   , untwineIO
   , ioStrand, ioStrand_
@@ -151,11 +152,13 @@ type family rope `Entwines` strands :: Constraint where
 tighten :: (RecApplicative m, RPureConstrained (IndexableField m) m)
         => LooseRope m core a b -> TightRope m core a b
 tighten (Rope f) = Rope $ f . fromARec
+{-# INLINE tighten #-}
 
 -- | Turn a 'TightRope' into a 'LooseRope'
 loosen :: (NatToInt (RLength m))
        => TightRope m core a b -> LooseRope m core a b
 loosen (Rope f) = Rope $ f . toARec
+{-# INLINE loosen #-}
 
 -- | Adds a new effect strand to the mantle of the 'Rope'. Users of that
 -- function should normally not place constraints on the core or instanciate
@@ -169,6 +172,15 @@ entwine :: Label name  -- ^ Give a name to the strand
 entwine _ run (Rope f) = Rope $ \r ->
   f (Weaver (\eff -> runRope (run eff) r) :& r)
 {-# INLINE entwine #-}
+
+-- | Merge two strands that have the same effect type. Keeps the first name.
+mergeStrands :: Label n1
+             -> Label n2
+             -> LooseRope ( '(n1,binEff) ': '(n2,binEff) ': mantle ) core a b
+             -> LooseRope ( '(n1,binEff) ': mantle ) core a b
+mergeStrands _ _ (Rope f) = Rope $ \(r@(Weaver w) :& rest) ->
+  f (r :& Weaver w :& rest)
+{-# INLINE mergeStrands #-}
 
 -- -- | Change the first effect strand of the 'Rope'
 -- swapStrand :: Label(strand1 ~> LooseRope (strand2 ': rest) core)

@@ -53,8 +53,8 @@ prog = proc name -> do
   strand #console PutLine -< "I read:\n" ++ contents
 
 main = prog & loosen
+            & mergeStrands #console #warnOutput -- We used a second Console
+                                                -- effect for warnings. We redirect it to #console
             & entwine #console interpConsole
-            & entwine #warnOutput interpConsole -- We use a second Console
-                                                -- effect for warnings
             & entwine #file interpFile
             & flip untwineIO "You"
