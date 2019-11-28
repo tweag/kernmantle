@@ -10,6 +10,9 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE OverloadedLabels #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE FunctionalDependencies #-}
 
 -- | A 'Rope' connects together various effect 'Strand's that get interlaced
 -- together.
@@ -25,17 +28,23 @@
 module Control.Kernmantle.Rope
   ( Product(..)
   , Tannen(..)
+  , Kleisli(..)
   , Rope(..)
   , TightRope, LooseRope
   , BinEff, Strand, RopeRec
   , Weaver(..)
+  , IOStrand
+  , InRope_(..), InRope
   , Label, fromLabel
-  , tighten, loosen
   , type (~>)
- 
+  , (&)
+
+  , tighten, loosen
   , untwine
   , entwine
-  , strand
+
+  , untwineIO
+  , ioStrand, ioStrand_
   )
 where
 
@@ -48,6 +57,7 @@ import Data.Bifunctor.Tannen
 import Data.Bifunctor.Product
 import Data.Profunctor
 import Data.Profunctor.Cayley
+import Data.Function ((&))
 import Data.Functor.Identity
 import Data.Typeable
 import Data.Vinyl hiding ((<+>))
@@ -121,11 +131,19 @@ type LooseRope = Rope Rec
 --   ( HasField record (StrandName strand) strands strands (Snd strand) (Snd strand)
 --   , RecElemFCtx record (Weaver core) )
 
+class InRope_ l eff rope where
+  -- | Lifts an effect in the 'Rope'. Performance should be better with a
+  -- 'TightRope' than with a 'LooseRope', unless you have very few 'Strand's.
+  strand :: Label l -> eff a b -> rope a b
+
+instance ( HasField record l mantle mantle eff eff
+         , RecElemFCtx record (Weaver core) )
+  => InRope_ l eff (Rope record mantle core) where
+  strand l eff = Rope $ \r -> weaveStrand (rgetf l r) eff
+  {-# INLINE strand #-}
+
 -- | Tells whether @namedStrand@ is in a 'Rope'
-type family (namedStrand::Strand) `InRope` rope where
-  strand `InRope` Rope record mantle core =
-    ( HasField record (StrandName strand) mantle mantle (StrandEff strand) (StrandEff strand)
-    , RecElemFCtx record (Weaver core) )
+type strand `InRope` rope = InRope_ (StrandName strand) (StrandEff strand) rope
 
 tighten :: LooseRope m core a b -> TightRope m core a b
 tighten = undefined
@@ -133,10 +151,14 @@ tighten = undefined
 loosen :: TightRope m core a b -> LooseRope m core a b
 loosen = undefined
 
--- | Adds a new effect strand to the mantle of the 'Rope'
-entwine :: (forall x y. StrandEff strand x y -> LooseRope mantle core x y)
-        -> LooseRope (strand ': mantle) core a b
-        -> LooseRope mantle core a b
+-- | Adds a new effect strand to the mantle of the 'Rope'. Users of that
+-- function should normally not place constraints on the core or instanciate
+-- it. Rather, requirement of the execution function should be expressed in
+-- terms of other effects of the @mantle@.
+entwine :: (StrandEff strand ~> LooseRope mantle core) -- ^ The execution function
+        -> LooseRope (strand ': mantle) core a b -- ^ The 'Rope' with an extra effect strand
+        -> LooseRope mantle core a b -- ^ The rope with the extra effect strand
+                                     -- woven in the core
 entwine run (Rope f) = Rope $ \r ->
   f (Weaver (\eff -> runRope (run eff) r) :& r)
 {-# INLINE entwine #-}
@@ -152,9 +174,20 @@ untwine :: LooseRope '[] core a b -> core a b
 untwine (Rope f) = f RNil
 {-# INLINE untwine #-}
 
--- | Lifts an effect in the 'Rope'. Performance should be better with a
--- 'TightRope' than with a 'LooseRope', unless you have very few 'Strand's.
-strand :: ('(l,strand) `InRope` Rope r m core)
-       => Label l -> strand a b -> Rope r m core a b 
-strand l eff = Rope $ \r -> weaveStrand (rgetf l r) eff
-{-# INLINE strand #-}
+-- | The 'Strand' for IO effects
+type IOStrand = '("io", Kleisli IO)
+
+-- | Untwines a 'Rope' which has only an IO effect left
+untwineIO :: LooseRope '[IOStrand] (Kleisli IO) a b -> a -> IO b
+untwineIO (Rope f) = runKleisli $ f (Weaver id :& RNil)
+{-# INLINE untwineIO #-}
+
+-- | Lifts an IO effect in the 'IOStrand'
+ioStrand :: (IOStrand `InRope` rope) => (a -> IO b) -> a `rope` b
+ioStrand = strand #io . Kleisli
+{-# INLINE ioStrand #-}
+
+-- | Lifts an IO effect with no input in the 'IOStrand'
+ioStrand_ :: (IOStrand `InRope` rope) => IO b -> () `rope` b
+ioStrand_ = strand #io . Kleisli . const
+{-# INLINE ioStrand_ #-}

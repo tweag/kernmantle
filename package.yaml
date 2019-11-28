@@ -28,3 +28,10 @@ dependencies:
 
 library:
   source-dirs: src
+
+executables:
+  ex1:
+    source-dirs: examples
+    main: Ex1.hs
+    dependencies:
+      - kernmantle
