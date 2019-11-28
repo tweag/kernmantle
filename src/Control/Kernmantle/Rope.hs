@@ -41,8 +41,9 @@ module Control.Kernmantle.Rope
   , (&)
 
   , tighten, loosen
-  , untwine
   , entwine
+  , retwine
+  , untwine
   , mergeStrands
 
   , untwineIO
@@ -172,6 +173,15 @@ entwine :: Label name  -- ^ Give a name to the strand
 entwine _ run (Rope f) = Rope $ \r ->
   f (Weaver (\eff -> runRope (run eff) r) :& r)
 {-# INLINE entwine #-}
+
+-- | Reorders the strands to match some external context. @strands'@ can contain
+-- more elements than @strands@. Note it works on both 'TightRope's and
+-- 'LooseRope's
+retwine :: (RecSubset r strands strands' (RImage strands strands'), RecSubsetFCtx r (Weaver core))
+        => Rope r strands core a b
+        -> Rope r strands' core a b
+retwine (Rope f) = Rope $ f . rcast
+{-# INLINE retwine #-}
 
 -- | Merge two strands that have the same effect type. Keeps the first name.
 mergeStrands :: Label n1
