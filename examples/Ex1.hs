@@ -34,7 +34,7 @@ interpFile cmd = ioStrand $ case cmd of
   GetFile -> readFile
   PutFile -> uncurry writeFile
 
-type ProgArrow a b = forall core rest. (Arrow core)
+type ProgArrow a b = forall core rest. (ArrowChoice core)
   => LooseRope ('("console",Console) ': '("file",File) ': rest) core a b
 
 -- | The Arrow program we will want to run
@@ -42,7 +42,9 @@ prog :: ProgArrow String ()
 prog = proc name -> do
   strand #console PutLine -< "Hello, " ++ name ++ ". What file would you like to open?"
   fname <- strand #console GetLine -< ()
-  contents <- strand #file GetFile -< fname
+  contents <- if fname == ""
+    then strand #console GetLine -< ()
+    else strand #file GetFile -< fname
   strand #console PutLine -< contents
 
 main = prog & entwine interpConsole
