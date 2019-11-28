@@ -8,7 +8,7 @@
 
 import Control.Kernmantle.Rope
 import Control.Arrow
-
+import Data.Proxy
 
 -- | The Console effect
 data a `Console` b where
@@ -34,11 +34,12 @@ interpFile cmd = ioStrand $ case cmd of
   GetFile -> readFile
   PutFile -> uncurry writeFile
 
-type ProgArrow a b = forall core rest. (ArrowChoice core)
-  => LooseRope ('("console",Console) ': '("file",File) ': rest) core a b
+type ProgArrow req a b = forall strands core.
+  ( ArrowChoice core, LooseRope strands core `Entwines` req )
+  => LooseRope strands core a b
 
 -- | The Arrow program we will want to run
-prog :: ProgArrow String ()
+prog :: ProgArrow '[ '("console",Console), '("file",File) ] String ()
 prog = proc name -> do
   strand #console PutLine -< "Hello, " ++ name ++ ". What file would you like to open?"
   fname <- strand #console GetLine -< ()
@@ -47,6 +48,6 @@ prog = proc name -> do
     else strand #file GetFile -< fname
   strand #console PutLine -< contents
 
-main = prog & entwine interpConsole
-            & entwine interpFile
+main = prog & entwine #console interpConsole
+            & entwine #file interpFile
             & flip untwineIO "You"

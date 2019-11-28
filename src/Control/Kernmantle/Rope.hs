@@ -32,6 +32,7 @@ module Control.Kernmantle.Rope
   , Rope(..)
   , TightRope, LooseRope
   , BinEff, Strand, RopeRec
+  , StrandName, StrandEff
   , Weaver(..)
   , IOStrand
   , InRope(..), Entwines
@@ -158,11 +159,12 @@ loosen = undefined
 -- function should normally not place constraints on the core or instanciate
 -- it. Rather, requirement of the execution function should be expressed in
 -- terms of other effects of the @mantle@.
-entwine :: (StrandEff strand ~> LooseRope mantle core) -- ^ The execution function
-        -> LooseRope (strand ': mantle) core a b -- ^ The 'Rope' with an extra effect strand
+entwine :: Label name
+        -> (binEff ~> LooseRope mantle core) -- ^ The execution function
+        -> LooseRope ('(name,binEff) ': mantle) core a b -- ^ The 'Rope' with an extra effect strand
         -> LooseRope mantle core a b -- ^ The rope with the extra effect strand
                                      -- woven in the core
-entwine run (Rope f) = Rope $ \r ->
+entwine _ run (Rope f) = Rope $ \r ->
   f (Weaver (\eff -> runRope (run eff) r) :& r)
 {-# INLINE entwine #-}
 
