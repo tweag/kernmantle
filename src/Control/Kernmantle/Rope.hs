@@ -22,7 +22,7 @@
 -- An action that targets some 'Strand' can be lifted to a 'Rope' that contains
 -- that 'Strand' with the 'strand' function.
 
-module Control.Kernmantle
+module Control.Kernmantle.Rope
   ( Product(..)
   , Tannen(..)
   , Rope(..)
