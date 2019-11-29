@@ -32,6 +32,13 @@ runFile cmd inp = case cmd of
   GetFile -> readFile inp
   PutFile -> uncurry writeFile inp
 
+-- | Just show the type of runFile once we lift it as part of the 'Rope'
+interpFile :: (rope `EntwinesU` '[ '("io", IO) ])  -- It requires an #io UStrand
+                                                   -- to put the interpreted
+                                                   -- effect in
+           => a `File` b -> a `rope` b
+interpFile = strandU #io . runFile
+
 type ProgArrow requiredStrands a b = forall strands core.
   ( ArrowChoice core, TightRope strands core `Entwines` requiredStrands )
   => TightRope strands core a b
@@ -59,8 +66,9 @@ main = prog & loosen -- We turn prog into a LooseRope, whose effects can be
             & entwine #console (strandU #io . runConsole)
                -- runConsole result just runs in IO. So we ask for a new #io
                -- strand to hold the interpreted console effects...
-            & entwine #file (strandU #io . runFile)
-               -- ...reuse that strand for the interpreted file effects...
+            & entwine #file interpFile
+               -- ...that strand will be reused by the interpreted File
+               -- effects...
             & entwine #io asCore
                -- ...then set this #io strand to be used as the core...
             & flip untwineU "You"
