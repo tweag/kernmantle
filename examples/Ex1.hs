@@ -9,17 +9,17 @@
 import Control.Kernmantle.Rope
 import Control.Arrow
 
+
 -- | The Console effect
 data a `Console` b where
   GetLine :: () `Console` String
   PutLine :: String `Console` ()
 
 -- | Run a Console effect in IO
-interpConsole :: (rope `Entwines` '[IOStrand])
-              => a `Console` b -> a `rope` b
-interpConsole cmd = ioStrand $ case cmd of
-  GetLine -> const getLine
-  PutLine -> putStrLn . (">> "++)
+runConsole :: a `Console` b -> a -> IO b
+runConsole cmd inp = case cmd of
+  GetLine -> getLine
+  PutLine -> putStrLn $ ">> "++ inp
 
 -- | The File effect
 data a `File` b where
@@ -27,34 +27,41 @@ data a `File` b where
   PutFile :: (FilePath, String) `File` ()
 
 -- | Run a File effect in IO
-interpFile :: (rope `Entwines` '[IOStrand])
-            => a `File` b -> a `rope` b
-interpFile cmd = ioStrand $ case cmd of
-  GetFile -> readFile
-  PutFile -> uncurry writeFile
+runFile :: a `File` b -> a -> IO b
+runFile cmd inp = case cmd of
+  GetFile -> readFile inp
+  PutFile -> uncurry writeFile inp
 
 type ProgArrow requiredStrands a b = forall strands core.
   ( ArrowChoice core, TightRope strands core `Entwines` requiredStrands )
   => TightRope strands core a b
 
-getContentsToOutput :: ProgArrow '[ '("console",Console), '("warnOutput",Console), '("file",File) ]
+getContentsToOutput :: ProgArrow '[ '("console",Console), '("warnConsole",Console), '("file",File) ]
                                  FilePath String
 getContentsToOutput = proc filename -> do
   if filename == ""
-    then strand #console GetLine <<< strand #warnOutput PutLine -< "Reading from command line"
+    then strand #console GetLine <<< strand #warnConsole PutLine -< "Reading from stdin"
     else strand #file GetFile -< filename
 
 -- | The Arrow program we will want to run
-prog :: ProgArrow '[ '("console",Console), '("warnOutput",Console), '("file",File) ]
+prog :: ProgArrow '[ '("console",Console), '("warnConsole",Console), '("file",File) ]
                   String ()
 prog = proc name -> do
   strand #console PutLine -< "Hello, " ++ name ++ ". What file would you like to open?"
   contents <- getContentsToOutput <<< strand #console GetLine -< ()
   strand #console PutLine -< "I read:\n" ++ contents
 
-main = prog & loosen
-            & mergeStrands #console #warnOutput -- We used a second Console
-                                                -- effect for warnings. We redirect it to #console
-            & entwine #console interpConsole
-            & entwine #file interpFile
-            & flip untwineIO "You"
+main = prog & loosen -- We turn prog into a LooseRope, whose effects can be
+                     -- executed one after the other
+            & mergeStrands #console #warnConsole
+               -- We used a second Console effect for warnings in prog. We
+               -- redirect it to #console
+            & entwine #console (strandU #io . runConsole)
+               -- runConsole result just runs in IO. So we ask for a new #io
+               -- strand to hold the interpreted console effects...
+            & entwine #file (strandU #io . runFile)
+               -- ...reuse that strand for the interpreted file effects...
+            & entwine #io asCore
+               -- ...then set this #io strand to be used as the core...
+            & flip untwineU "You"
+               -- ...and then we run the core

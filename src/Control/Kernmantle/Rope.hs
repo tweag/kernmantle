@@ -31,23 +31,22 @@ module Control.Kernmantle.Rope
   , Kleisli(..)
   , Rope(..)
   , TightRope, LooseRope
-  , BinEff, Strand, RopeRec
+  , BinEff, Strand, UStrand, RopeRec
   , StrandName, StrandEff
   , Weaver(..)
-  , IOStrand
-  , InRope(..), Entwines
+  , InRope(..), Entwines, EntwinesU
   , Label, fromLabel
+  , FromUnary
   , type (~>)
   , (&)
 
+  , strandU, strandU_
   , tighten, loosen
-  , entwine
+  , entwine, entwineU
   , retwine
-  , untwine
+  , untwine, untwineU
   , mergeStrands
-
-  , untwineIO
-  , ioStrand, ioStrand_
+  , asCore, asCoreU
   )
 where
 
@@ -77,14 +76,20 @@ import Prelude hiding (id, (.))
 -- (contravariant) of the effect and second one an output (covariant).
 type BinEff = * -> * -> *
 
+-- | The kind for unary effects
+type UEff = * -> *
+
 -- | The kind for a named binary effect. Must remain a tuple because that's what
 -- vinyl expects.
 type Strand = (Symbol, BinEff)
 
-type family StrandName (t::Strand) where
+-- | The kind for a named unary effect
+type UStrand = (Symbol, UEff)
+
+type family StrandName t where
   StrandName '(name, eff) = name
 
-type family StrandEff (t::Strand) where
+type family StrandEff t where
   StrandEff '(name, eff) = eff
 
 -- | The kind for records that will contain 'Weaver's. First type param will
@@ -133,7 +138,7 @@ type TightRope = Rope ARec
 type LooseRope = Rope Rec
 
 class InRope l eff rope where
-  -- | Lifts an effect in the 'Rope'. Performance should be better with a
+  -- | Lifts a binary effect in the 'Rope'. Performance should be better with a
   -- 'TightRope' than with a 'LooseRope', unless you have very few 'Strand's.
   strand :: Label l -> eff a b -> rope a b
 
@@ -143,11 +148,32 @@ instance ( HasField record l mantle mantle eff eff
   strand l eff = Rope $ \r -> weaveStrand (rgetf l r) eff
   {-# INLINE strand #-}
 
+-- | Turns a unary effect into a binary one
+type FromUnary = Kleisli
+
+-- | Lifts a unary effect in the 'Rope'
+strandU :: (InRope l (Kleisli ueff) rope)
+        => Label l -> (a -> ueff b) -> rope a b
+strandU l = strand l . Kleisli
+{-# INLINE strandU #-}
+
+-- | Lifts a unary effect expecting no input in the 'Rope'
+strandU_ :: (InRope l (FromUnary ueff) rope)
+         => Label l -> ueff b -> rope () b
+strandU_ l = strandU l . const
+{-# INLINE strandU_ #-}
+
 -- | Tells whether a collection of @strands@ is in a 'Rope'
-type family rope `Entwines` strands :: Constraint where
+type family rope `Entwines` (strands::[Strand]) :: Constraint where
   rope `Entwines` '[] = ()
   rope `Entwines` ('(name, eff) ': strands ) = ( InRope name eff rope
                                                , rope `Entwines` strands )
+
+-- | Tells whether a collection of unary strands is in a 'Rope'
+type family rope `EntwinesU` (ustrands::[UStrand]) :: Constraint where
+  rope `EntwinesU` '[] = ()
+  rope `EntwinesU` ('(name, eff) ': strands ) = ( InRope name (FromUnary eff) rope
+                                                , rope `EntwinesU` strands )
 
 -- | Turn a 'LooseRope' into a 'TightRope'
 tighten :: (RecApplicative m, RPureConstrained (IndexableField m) m)
@@ -161,10 +187,10 @@ loosen :: (NatToInt (RLength m))
 loosen (Rope f) = Rope $ f . toARec
 {-# INLINE loosen #-}
 
--- | Adds a new effect strand to the mantle of the 'Rope'. Users of that
--- function should normally not place constraints on the core or instanciate
--- it. Rather, requirement of the execution function should be expressed in
--- terms of other effects of the @mantle@.
+-- | Adds a new effect strand in the 'Rope'. Users of that function should
+-- normally not place constraints on the core or instanciate it. Rather,
+-- requirement of the execution function should be expressed in terms of other
+-- effects of the @mantle@.
 entwine :: Label name  -- ^ Give a name to the strand
         -> (binEff ~> LooseRope mantle core) -- ^ The execution function
         -> LooseRope ('(name,binEff) ': mantle) core a b -- ^ The 'Rope' with an extra effect strand
@@ -173,6 +199,25 @@ entwine :: Label name  -- ^ Give a name to the strand
 entwine _ run (Rope f) = Rope $ \r ->
   f (Weaver (\eff -> runRope (run eff) r) :& r)
 {-# INLINE entwine #-}
+
+-- | 'entwine' a unary effect in the 'Rope'
+entwineU :: Label name  -- ^ Give a name to the strand
+         -> (forall x y. (x -> ueff y) -> LooseRope mantle core x y) -- ^ The execution function
+         -> LooseRope ('(name,FromUnary ueff) ': mantle) core a b -- ^ The 'Rope' with an extra effect strand
+         -> LooseRope mantle core a b -- ^ The rope with the extra effect strand
+                                      -- woven in the core
+entwineU l run = entwine l $ run . runKleisli
+{-# INLINE entwineU #-}
+
+-- | Runs an effect directly in the core. You should use that function only as
+-- part of a call to 'entwine'.
+asCore :: core x y -> Rope r mantle core x y
+asCore = Rope . const
+
+-- | Runs a unary effect directly in the core. You should use that function only
+-- as part of a call to 'entwine'.
+asCoreU :: (x -> core y) -> Rope r mantle (FromUnary core) x y
+asCoreU = asCore . Kleisli
 
 -- | Reorders the strands to match some external context. @strands'@ can contain
 -- more elements than @strands@. Note it works on both 'TightRope's and
@@ -192,31 +237,11 @@ mergeStrands _ _ (Rope f) = Rope $ \(r@(Weaver w) :& rest) ->
   f (r :& Weaver w :& rest)
 {-# INLINE mergeStrands #-}
 
--- -- | Change the first effect strand of the 'Rope'
--- swapStrand :: Label(strand1 ~> LooseRope (strand2 ': rest) core)
---            -> LooseRope (strand1 ': rest) (LooseRope (strand2 ': rest) core) a b
---            -> LooseRope (strand2 ': rest) core a b
--- swapStrand = undefined
-
 -- | Runs a 'Rope' with no strands inside its core strand
 untwine :: LooseRope '[] core a b -> core a b
 untwine (Rope f) = f RNil
 {-# INLINE untwine #-}
 
--- | The 'Strand' for IO effects
-type IOStrand = '("io", Kleisli IO)
-
--- | Untwines a 'Rope' which has only an IO effect left
-untwineIO :: LooseRope '[IOStrand] (Kleisli IO) a b -> a -> IO b
-untwineIO (Rope f) = runKleisli $ f (Weaver id :& RNil)
-{-# INLINE untwineIO #-}
-
--- | Lifts an IO effect in the 'IOStrand'
-ioStrand :: (rope `Entwines` '[IOStrand]) => (a -> IO b) -> a `rope` b
-ioStrand = strand #io . Kleisli
-{-# INLINE ioStrand #-}
-
--- | Lifts an IO effect with no input in the 'IOStrand'
-ioStrand_ :: (rope `Entwines` '[IOStrand]) => IO b -> () `rope` b
-ioStrand_ = strand #io . Kleisli . const
-{-# INLINE ioStrand_ #-}
+untwineU :: LooseRope '[] (FromUnary ueff) a b -> a -> ueff b
+untwineU = runKleisli . untwine
+{-# INLINE untwineU #-}
