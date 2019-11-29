@@ -27,7 +27,8 @@ eff a b
 
 where `eff` is most often contravariant in `a` (input) and covariant in `b`
 (output) like any function (but the type system doesn't enforce that). The
-simplest effect conceivable is therefore the pure function `(->)`.
+simplest binary effect conceivable is therefore... the one that performs no
+effect, that is, the pure function `(->)`.
 
 ## How do I create "binary effects"?
 
