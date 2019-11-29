@@ -227,6 +227,7 @@ untwine :: LooseRope '[] core a b -> core a b
 untwine (Rope f) = f RNil
 {-# INLINE untwine #-}
 
-untwineUnary :: LooseRope '[] (FromUnary ueff) a b -> a -> ueff b
-untwineUnary = runKleisli . untwine
+-- | Runs a 'Rope' whose core is a unary effect. Input is the first argument
+untwineUnary :: a -> LooseRope '[] (FromUnary ueff) a b -> ueff b
+untwineUnary a r = runKleisli (untwine r) a
 {-# INLINE untwineUnary #-}

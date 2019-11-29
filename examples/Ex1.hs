@@ -70,15 +70,16 @@ main = prog & loosen -- We turn prog into a LooseRope, whose effects can be
                -- ...that strand will be reused by the interpreted File
                -- effects...
             & entwine #io asCore
-               -- ...then set this #io strand to be used as the core...
-            & flip untwineUnary "You"
-               -- ...and then we run the core
+               -- ...then set this #io strand to be directly interpreted in the
+               -- core...
+            & untwineUnary "You"
+               -- ...and then we run the core with the input of prog
 
--- | main details every strand, but we skip the #io strand an directly interpret
--- in the core effect
+-- | main details every strand, but we can skip the #io strand an directly
+-- interpret strands in the core effect
 altMain :: IO ()
 altMain = prog & loosen
                & mergeStrands #console #warnConsole
                & entwine #console (asCore . unary . runConsole)
                & entwine #file (asCore . unary . runFile)
-               & flip untwineUnary "You"
+               & untwineUnary "You"
