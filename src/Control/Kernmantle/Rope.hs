@@ -31,7 +31,7 @@ module Control.Kernmantle.Rope
   , Kleisli(..)
   , Rope(..)
   , TightRope, LooseRope
-  , BinEff, Strand, UStrand, RopeRec
+  , BinEff, Strand, UnaryStrand, RopeRec
   , StrandName, StrandEff
   , Weaver(..)
   , InRope(..), Entwines, EntwinesU
@@ -40,13 +40,13 @@ module Control.Kernmantle.Rope
   , type (~>)
   , (&)
 
-  , strandU, strandU_
   , tighten, loosen
-  , entwine, entwineU
+  , entwine
   , retwine
-  , untwine, untwineU
+  , untwine, untwineUnary
   , mergeStrands
-  , asCore, asCoreU
+  , asCore
+  , unary, unary_
   )
 where
 
@@ -77,14 +77,14 @@ import Prelude hiding (id, (.))
 type BinEff = * -> * -> *
 
 -- | The kind for unary effects
-type UEff = * -> *
+type UnaryEff = * -> *
 
 -- | The kind for a named binary effect. Must remain a tuple because that's what
 -- vinyl expects.
 type Strand = (Symbol, BinEff)
 
 -- | The kind for a named unary effect
-type UStrand = (Symbol, UEff)
+type UnaryStrand = (Symbol, UnaryEff)
 
 type family StrandName t where
   StrandName '(name, eff) = name
@@ -148,29 +148,14 @@ instance ( HasField record l mantle mantle eff eff
   strand l eff = Rope $ \r -> weaveStrand (rgetf l r) eff
   {-# INLINE strand #-}
 
--- | Turns a unary effect into a binary one
-type FromUnary = Kleisli
-
--- | Lifts a unary effect in the 'Rope'
-strandU :: (InRope l (Kleisli ueff) rope)
-        => Label l -> (a -> ueff b) -> rope a b
-strandU l = strand l . Kleisli
-{-# INLINE strandU #-}
-
--- | Lifts a unary effect expecting no input in the 'Rope'
-strandU_ :: (InRope l (FromUnary ueff) rope)
-         => Label l -> ueff b -> rope () b
-strandU_ l = strandU l . const
-{-# INLINE strandU_ #-}
-
 -- | Tells whether a collection of @strands@ is in a 'Rope'
 type family rope `Entwines` (strands::[Strand]) :: Constraint where
   rope `Entwines` '[] = ()
   rope `Entwines` ('(name, eff) ': strands ) = ( InRope name eff rope
                                                , rope `Entwines` strands )
 
--- | Tells whether a collection of unary strands is in a 'Rope'
-type family rope `EntwinesU` (ustrands::[UStrand]) :: Constraint where
+-- | Tells whether a collection of _unary_ @strands@ is in a 'Rope'
+type family rope `EntwinesU` (ustrands::[UnaryStrand]) :: Constraint where
   rope `EntwinesU` '[] = ()
   rope `EntwinesU` ('(name, eff) ': strands ) = ( InRope name (FromUnary eff) rope
                                                 , rope `EntwinesU` strands )
@@ -200,24 +185,24 @@ entwine _ run (Rope f) = Rope $ \r ->
   f (Weaver (\eff -> runRope (run eff) r) :& r)
 {-# INLINE entwine #-}
 
--- | 'entwine' a unary effect in the 'Rope'
-entwineU :: Label name  -- ^ Give a name to the strand
-         -> (forall x y. (x -> ueff y) -> LooseRope mantle core x y) -- ^ The execution function
-         -> LooseRope ('(name,FromUnary ueff) ': mantle) core a b -- ^ The 'Rope' with an extra effect strand
-         -> LooseRope mantle core a b -- ^ The rope with the extra effect strand
-                                      -- woven in the core
-entwineU l run = entwine l $ run . runKleisli
-{-# INLINE entwineU #-}
+-- | Turns a unary effect into a binary one
+type FromUnary = Kleisli
+
+-- | Turns a function computing a unary effect to a binary effect
+unary :: (a -> ueff b) -> FromUnary ueff a b
+unary = Kleisli
+{-# INLINE unary #-}
+
+-- | Turns a unary effect into a binary effect
+unary_ :: ueff x -> FromUnary ueff () x
+unary_ = Kleisli . const
+{-# INLINE unary_ #-}
 
 -- | Runs an effect directly in the core. You should use that function only as
 -- part of a call to 'entwine'.
 asCore :: core x y -> Rope r mantle core x y
 asCore = Rope . const
-
--- | Runs a unary effect directly in the core. You should use that function only
--- as part of a call to 'entwine'.
-asCoreU :: (x -> core y) -> Rope r mantle (FromUnary core) x y
-asCoreU = asCore . Kleisli
+{-# INLINE asCore #-}
 
 -- | Reorders the strands to match some external context. @strands'@ can contain
 -- more elements than @strands@. Note it works on both 'TightRope's and
@@ -242,6 +227,6 @@ untwine :: LooseRope '[] core a b -> core a b
 untwine (Rope f) = f RNil
 {-# INLINE untwine #-}
 
-untwineU :: LooseRope '[] (FromUnary ueff) a b -> a -> ueff b
-untwineU = runKleisli . untwine
-{-# INLINE untwineU #-}
+untwineUnary :: LooseRope '[] (FromUnary ueff) a b -> a -> ueff b
+untwineUnary = runKleisli . untwine
+{-# INLINE untwineUnary #-}

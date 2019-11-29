@@ -37,7 +37,7 @@ interpFile :: (rope `EntwinesU` '[ '("io", IO) ])  -- It requires an #io UStrand
                                                    -- to put the interpreted
                                                    -- effect in
            => a `File` b -> a `rope` b
-interpFile = strandU #io . runFile
+interpFile = strand #io . unary . runFile
 
 type ProgArrow requiredStrands a b = forall strands core.
   ( ArrowChoice core, TightRope strands core `Entwines` requiredStrands )
@@ -63,7 +63,7 @@ main = prog & loosen -- We turn prog into a LooseRope, whose effects can be
             & mergeStrands #console #warnConsole
                -- We used a second Console effect for warnings in prog. We
                -- redirect it to #console
-            & entwine #console (strandU #io . runConsole)
+            & entwine #console (strand #io . unary . runConsole)
                -- runConsole result just runs in IO. So we ask for a new #io
                -- strand to hold the interpreted console effects...
             & entwine #file interpFile
@@ -71,7 +71,7 @@ main = prog & loosen -- We turn prog into a LooseRope, whose effects can be
                -- effects...
             & entwine #io asCore
                -- ...then set this #io strand to be used as the core...
-            & flip untwineU "You"
+            & flip untwineUnary "You"
                -- ...and then we run the core
 
 -- | main details every strand, but we skip the #io strand an directly interpret
@@ -79,6 +79,6 @@ main = prog & loosen -- We turn prog into a LooseRope, whose effects can be
 altMain :: IO ()
 altMain = prog & loosen
                & mergeStrands #console #warnConsole
-               & entwine #console (asCoreU . runConsole)
-               & entwine #file (asCoreU . runFile)
-               & flip untwineU "You"
+               & entwine #console (asCore . unary . runConsole)
+               & entwine #file (asCore . unary . runFile)
+               & flip untwineUnary "You"
