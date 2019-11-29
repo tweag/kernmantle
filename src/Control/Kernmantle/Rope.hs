@@ -37,13 +37,14 @@ module Control.Kernmantle.Rope
   , InRope(..), Entwines, EntwinesU
   , Label, fromLabel
   , FromUnary
-  , type (~>)
+  , type (:->)
   , (&)
 
   , tighten, loosen
   , entwine
   , retwine
-  , untwine, untwineUnary
+  , untwine
+  , runUnaryCore
   , mergeStrands
   , asCore
   , unary, unary_
@@ -96,14 +97,11 @@ type family StrandEff t where
 -- most often be @Weaver someCore@
 type RopeRec = (Strand -> *) -> [Strand] -> *
 
--- | A natural transformation on type constructors of two arguments.
-type f ~> g = forall x y. f x y -> g x y
-
 -- | Runs one "mantle" strand (* -> * -> * effect) in a "core" strand. Is
 -- parameterized over a Strand even if it ignores its name internally
 -- because that's what is expect by the 'RopeRec'
 newtype Weaver (core::BinEff) (strand::Strand) = Weaver
-  { weaveStrand :: StrandEff strand ~> core }
+  { weaveStrand :: StrandEff strand :-> core }
 
 -- | 'Rope' is a free arrow built out of _several_ binary effects
 -- (ie. effects with kind * -> * -> *). These effects are called 'Strand's, they
@@ -177,7 +175,7 @@ loosen (Rope f) = Rope $ f . toARec
 -- requirement of the execution function should be expressed in terms of other
 -- effects of the @mantle@.
 entwine :: Label name  -- ^ Give a name to the strand
-        -> (binEff ~> LooseRope mantle core) -- ^ The execution function
+        -> (binEff :-> LooseRope mantle core) -- ^ The execution function
         -> LooseRope ('(name,binEff) ': mantle) core a b -- ^ The 'Rope' with an extra effect strand
         -> LooseRope mantle core a b -- ^ The rope with the extra effect strand
                                      -- woven in the core
@@ -222,12 +220,12 @@ mergeStrands _ _ (Rope f) = Rope $ \(r@(Weaver w) :& rest) ->
   f (r :& Weaver w :& rest)
 {-# INLINE mergeStrands #-}
 
--- | Runs a 'Rope' with no strands inside its core strand
+-- | Strips a 'Rope' of its empty mantel.
 untwine :: LooseRope '[] core a b -> core a b
 untwine (Rope f) = f RNil
 {-# INLINE untwine #-}
 
--- | Runs a 'Rope' whose core is a unary effect. Input is the first argument
-untwineUnary :: a -> LooseRope '[] (FromUnary ueff) a b -> ueff b
-untwineUnary a r = runKleisli (untwine r) a
-{-# INLINE untwineUnary #-}
+-- | Runs a 'Rope' with no strands left when its core is a unary effect.
+runUnaryCore :: a -> LooseRope '[] (FromUnary ueff) a b -> ueff b
+runUnaryCore a r = runKleisli (untwine r) a
+{-# INLINE runUnaryCore #-}
