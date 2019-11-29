@@ -1,7 +1,8 @@
 # Kernmantle
 
 Kernmantle braids some strands of effects into a `Rope` that will be the basis
-of your application. The effects are interlaced, meaning they can be chained
+of your application. By "effect", understand "anything that is not a pure computation
+from an input value to an output value". The effects are interlaced, meaning they can be chained
 like the following:
 
 ```haskell
