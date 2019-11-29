@@ -32,33 +32,38 @@ runFile cmd inp = case cmd of
   GetFile -> readFile inp
   PutFile -> uncurry writeFile inp
 
--- | Just show the type of runFile once we lift it as part of the 'Rope'
-interpFile :: (rope `EntwinesU` '[ '("io", IO) ])  -- It requires an #io UStrand
-                                                   -- to put the interpreted
-                                                   -- effect in
-           => a `File` b -> a `rope` b
+-- | Just to show the type of runFile once we lift it as part of the 'Rope'
+interpFile :: a `File` b
+           -> AnyRopeWith '[ '("io", FromUnary IO) ] '[] a b
+              -- We give our list of requirements. Interpreting File effects
+              -- will require an #io Strand to put the IO actions in. No
+              -- requirements on the core.
 interpFile = strand #io . unary . runFile
 
-type ProgArrow requiredStrands a b = forall strands core.
-  ( ArrowChoice core, TightRope strands core `Entwines` requiredStrands )
-  => TightRope strands core a b
+-- | Just a shortcut to say our program can run in any rope that supports our
+-- effects and whose core implements ArrowChoice
+type a ~~> b =
+  AnyRopeWith '[ '("console",Console), '("warnConsole",Console), '("file",File) ]
+              '[ArrowChoice]
+              a b
 
-getContentsToOutput :: ProgArrow '[ '("console",Console), '("warnConsole",Console), '("file",File) ]
-                                 FilePath String
+getContentsToOutput :: FilePath ~~> String
 getContentsToOutput = proc filename -> do
-  if filename == ""
+  if filename == ""  -- This branching requires ArrowChoice. That's why we put
+                     -- it in our type alias as a condition
     then strand #console GetLine <<< strand #warnConsole PutLine -< "Reading from stdin"
     else strand #file GetFile -< filename
 
 -- | The Arrow program we will want to run
-prog :: ProgArrow '[ '("console",Console), '("warnConsole",Console), '("file",File) ]
-                  String ()
+prog :: String ~~> ()
 prog = proc name -> do
   strand #console PutLine -< "Hello, " ++ name ++ ". What file would you like to open?"
   contents <- getContentsToOutput <<< strand #console GetLine -< ()
   strand #console PutLine -< "I read:\n" ++ contents
 
-main = prog & loosen -- We turn prog into a LooseRope, whose effects can be
+main :: IO ()
+main = prog & loosen -- We tell that prog should be a TightRope, and at the same
+                     -- time turn it into a LooseRope, whose effects can be
                      -- executed one after the other
             & mergeStrands #console #warnConsole
                -- We used a second Console effect for warnings in prog. We
@@ -67,7 +72,7 @@ main = prog & loosen -- We turn prog into a LooseRope, whose effects can be
                -- runConsole result just runs in IO. So we ask for a new #io
                -- strand to hold the interpreted console effects...
             & entwine #file interpFile
-               -- ...that strand will be reused by the interpreted File
+               -- ...that #io strand will be reused by the interpreted File
                -- effects...
             & entwine #io asCore
                -- ...then set this #io strand to be directly interpreted in the

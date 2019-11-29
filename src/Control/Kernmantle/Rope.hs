@@ -31,10 +31,12 @@ module Control.Kernmantle.Rope
   , Kleisli(..)
   , Rope(..)
   , TightRope, LooseRope
-  , BinEff, Strand, UnaryStrand, RopeRec
+  , BinEff, Strand, RopeRec
   , StrandName, StrandEff
   , Weaver(..)
-  , InRope(..), Entwines, EntwinesU
+  , InRope(..)
+  , AnyRopeWith
+  , Entwines, SatisfiesAll
   , Label, fromLabel
   , FromUnary
   , type (:->)
@@ -83,9 +85,6 @@ type UnaryEff = * -> *
 -- | The kind for a named binary effect. Must remain a tuple because that's what
 -- vinyl expects.
 type Strand = (Symbol, BinEff)
-
--- | The kind for a named unary effect
-type UnaryStrand = (Symbol, UnaryEff)
 
 type family StrandName t where
   StrandName '(name, eff) = name
@@ -152,11 +151,15 @@ type family rope `Entwines` (strands::[Strand]) :: Constraint where
   rope `Entwines` ('(name, eff) ': strands ) = ( InRope name eff rope
                                                , rope `Entwines` strands )
 
--- | Tells whether a collection of _unary_ @strands@ is in a 'Rope'
-type family rope `EntwinesU` (ustrands::[UnaryStrand]) :: Constraint where
-  rope `EntwinesU` '[] = ()
-  rope `EntwinesU` ('(name, eff) ': strands ) = ( InRope name (FromUnary eff) rope
-                                                , rope `EntwinesU` strands )
+type family (x::k) `SatisfiesAll` (csts::[k -> Constraint]) :: Constraint where
+  x `SatisfiesAll` '[] = ()
+  x `SatisfiesAll` (c1 ': cnsts) = ( c1 x, x `SatisfiesAll` cnsts)
+
+-- | A 'Rope' with some requirements on the strands, though not on their
+-- ordering, and on the core
+type AnyRopeWith strands coreConstraints a b = forall s r c.
+  (Rope r s c `Entwines` strands, c `SatisfiesAll` coreConstraints)
+  => Rope r s c a b
 
 -- | Turn a 'LooseRope' into a 'TightRope'
 tighten :: (RecApplicative m, RPureConstrained (IndexableField m) m)
