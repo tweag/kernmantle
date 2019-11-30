@@ -55,8 +55,7 @@ where
 
 import Control.Category
 import Control.Arrow
-
-import Control.Monad.Reader
+import Control.Monad.Trans.Reader
 import Data.Bifunctor
 import Data.Bifunctor.Tannen
 import Data.Bifunctor.Product
@@ -73,6 +72,8 @@ import GHC.TypeLits
 import GHC.OverloadedLabels
 
 import Prelude hiding (id, (.))
+
+import Control.Kernmantle.Error
 
 
 -- | The kind for all binary effects. First param is usually an input
@@ -110,8 +111,10 @@ newtype Rope (record::RopeRec) (mantle::[Strand]) (core::BinEff) a b =
   Rope
     { runRope :: record (Weaver core) mantle -> core a b }
   
-  deriving (Category, Arrow, ArrowChoice, ArrowLoop, ArrowZero, ArrowPlus
-           ,Bifunctor)
+  deriving ( Category, Bifunctor
+           , Arrow, ArrowChoice, ArrowLoop, ArrowZero, ArrowPlus
+           , ThrowEffect ex, TryEffect ex
+           )
     via Reader (record (Weaver core) mantle) `Tannen` core
 
   deriving (Profunctor, Strong, Choice)

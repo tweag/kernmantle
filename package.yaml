@@ -25,7 +25,8 @@ dependencies:
 - profunctors
 - comonad
 - vinyl >= 0.11
-- mtl
+- transformers
+- safe-exceptions
 
 library:
   source-dirs: src
