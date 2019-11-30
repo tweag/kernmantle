@@ -5,7 +5,10 @@
 
 -- | Deal with throw and try effects
 
-module Control.Kernmantle.Error where
+module Control.Kernmantle.Error
+  (ThrowEffect(..), TryEffect(..), catchE
+  ,module Control.Exception.Safe)
+where
 
 import Control.Applicative
 import Control.Arrow

@@ -6,6 +6,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE RankNTypes #-}
 
+import Control.Kernmantle.Error
 import Control.Kernmantle.Rope
 import Control.Arrow
 
@@ -41,10 +42,11 @@ interpFile :: a `File` b
 interpFile = strand #io . unary . runFile
 
 -- | Just a shortcut to say our program can run in any rope that supports our
--- effects and whose core implements ArrowChoice
+-- effects and whose core implements ArrowChoice and allows us to catch
+-- IOExceptions
 type a ~~> b =
   AnyRopeWith '[ '("console",Console), '("warnConsole",Console), '("file",File) ]
-              '[ArrowChoice]
+              '[ArrowChoice, TryEffect IOException]
               a b
 
 getContentsToOutput :: FilePath ~~> String
@@ -52,14 +54,18 @@ getContentsToOutput = proc filename -> do
   if filename == ""  -- This branching requires ArrowChoice. That's why we put
                      -- it in our type alias as a condition
     then strand #console GetLine <<< strand #warnConsole PutLine -< "Reading from stdin"
-    else strand #file GetFile -< filename
+    else do
+      res <- tryE (strand #file GetFile) -< filename
+      returnA -< case res of
+        Left e -> "Had an error:\n" ++ displayException (e::IOError)
+        Right str -> "I read from " ++ filename ++ ":\n" ++ str
 
 -- | The Arrow program we will want to run
 prog :: String ~~> ()
 prog = proc name -> do
   strand #console PutLine -< "Hello, " ++ name ++ ". What file would you like to open?"
   contents <- getContentsToOutput <<< strand #console GetLine -< ()
-  strand #console PutLine -< "I read:\n" ++ contents
+  strand #console PutLine -< contents
 
 main :: IO ()
 main = prog & loosen -- We tell that prog should be a TightRope, and at the same
