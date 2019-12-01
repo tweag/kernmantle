@@ -59,7 +59,7 @@ import Control.Monad.Trans.Reader
 import Data.Bifunctor
 import Data.Bifunctor.Tannen
 import Data.Bifunctor.Product
-import Data.Profunctor
+import Data.Profunctor hiding (rmap)
 import Data.Profunctor.Cayley
 import Data.Profunctor.Sieve
 import Data.Function ((&))
@@ -178,25 +178,11 @@ loosen (Rope f) = Rope $ f . toARec
 entwine :: Label name  -- ^ Give a name to the strand
         -> (binEff :-> LooseRope mantle core) -- ^ The execution function
         -> LooseRope ('(name,binEff) ': mantle) core a b -- ^ The 'Rope' with an extra effect strand
-        -> LooseRope mantle core a b -- ^ The rope with the extra effect strand
+        -> LooseRope mantle core a b -- ^ The 'Rope' with the extra effect strand
                                      -- woven in the core
 entwine _ run (Rope f) = Rope $ \r ->
   f (Weaver (\eff -> runRope (run eff) r) :& r)
 {-# INLINE entwine #-}
-
--- | A 'Sieve' is a binary effect constructed from a functorial (or monadic)
--- unary effect.
-type ToSieve = Kleisli
-
--- | Turns a function computing a functorial/monadic effect to a binary effect
-toSieve :: (a -> ueff b) -> ToSieve ueff a b
-toSieve = Kleisli
-{-# INLINE toSieve #-}
-
--- | Turns a functorial/monadic effect into a binary effect
-toSieve_ :: ueff x -> ToSieve ueff () x
-toSieve_ = Kleisli . const
-{-# INLINE toSieve_ #-}
 
 -- | Runs an effect directly in the core. You should use that function only as
 -- part of a call to 'entwine'.
@@ -204,15 +190,30 @@ asCore :: core x y -> Rope r mantle core x y
 asCore = Rope . const
 {-# INLINE asCore #-}
 
+-- | Indicates that @strands@ can be reordered and considered a subset of
+-- @strands'@
+type RetwinableAs record strands core strands' =
+  ( RecSubset record strands strands' (RImage strands strands')
+  , RecSubsetFCtx record (Weaver core) )
+
 -- | Reorders the strands to match some external context. @strands'@ can contain
 -- more elements than @strands@. Note it works on both 'TightRope's and
 -- 'LooseRope's
-retwine :: ( RecSubset r strands strands' (RImage strands strands')
-           , RecSubsetFCtx r (Weaver core) )
+retwine :: (RetwinableAs r strands core strands')
         => Rope r strands core a b
         -> Rope r strands' core a b
 retwine (Rope f) = Rope $ f . rcast
 {-# INLINE retwine #-}
+
+-- | Splits a 'Rope' in two parts, so we can select several strands to act on
+splitRope :: (RMap mantle1)
+          => LooseRope (mantle1 ++ mantle2) core a b
+          -> LooseRope mantle1 (LooseRope mantle2 core) a b
+splitRope (Rope f) = Rope $ \r1 -> Rope $ \r2 ->
+  f $ rmap (runWith r2) r1 `rappend` r2
+  where
+    runWith r (Weaver toInnerRope) = Weaver $ \strand ->
+        runRope (toInnerRope strand) r
 
 -- | Merge two strands that have the same effect type. Keeps the first name.
 mergeStrands :: Label n1
@@ -228,9 +229,39 @@ untwine :: LooseRope '[] core a b -> core a b
 untwine (Rope f) = f RNil
 {-# INLINE untwine #-}
 
--- | Runs a 'Rope' with no strands left when its core is a Sieve (ie. is
+
+-- * Creating and running binary effects from unary effects
+
+-- | Runs a 'Rope' with no strands left when its core is a 'Sieve' (ie. is
 -- mappable to a functorial/monadic effect)
 runSieveCore :: (Sieve biEff uEff)
              => a -> LooseRope '[] biEff a b -> uEff b
 runSieveCore a r = sieve (untwine r) a
 {-# INLINE runSieveCore #-}
+
+-- | A 'Sieve' is a binary effect constructed from a functorial (or monadic)
+-- unary effect.
+type ToSieve = Kleisli
+
+-- | Turns a function computing a functorial/monadic effect to a binary effect
+toSieve :: (a -> ueff b) -> ToSieve ueff a b
+toSieve = Kleisli
+{-# INLINE toSieve #-}
+
+-- | Turns a functorial/monadic effect into a binary effect
+toSieve_ :: ueff x -> ToSieve ueff () x
+toSieve_ = Kleisli . const
+{-# INLINE toSieve_ #-}
+
+-- | Adds some ahead-of-time (functorial) unary effects to any binary effect,
+-- that should be executed /before/ we get to the binary effect. These
+-- ahead-of-time effects can be CLI parsing, access to some configuration,
+-- pre-processing of the compute graph, etc.
+type WithAoTEff a f = Tannen f a
+
+-- | When you have a functorial effect returning a, register it as ahead-of-time
+-- effect to be executed /before/ eff can be executed. Ahead-of-time effects can
+-- be merged together if @f@ is 'Applicative'
+withAoTEff :: f (eff x y) -> (eff `WithAoTEff` f) x y
+withAoTEff = Tannen
+{-# INLINE withAoTEff #-}
