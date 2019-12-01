@@ -1,12 +1,11 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE Arrows #-}
 
 -- | Deal with throw and try effects
 
 module Control.Kernmantle.Error
-  (ThrowEffect(..), TryEffect(..), catchE
+  (ThrowEffect(..), TryEffect(..)
   ,module Control.Exception.Safe)
 where
 
@@ -39,16 +38,3 @@ instance (Applicative f, ThrowEffect ex eff) => ThrowEffect ex (f `Tannen` eff) 
 instance (Functor f, TryEffect ex eff) => TryEffect ex (f `Tannen` eff) where
   tryE (Tannen f) = Tannen $ tryE <$> f
   {-# INLINE tryE #-}
-
--- | If a 'TryEffect' is also an 'ArrowChoice', then we can implement catch
-catchE :: (TryEffect ex eff, ArrowChoice eff)
-       => eff e c  -- ^ The effect to wrap
-       -> eff (e, ex) c  -- ^ What to do in case of exception
-       -> eff e c
-catchE a onExc = proc e -> do
-  res <- tryE a -< e
-  case res of
-    Left ex ->
-      onExc -< (e, ex)
-    Right r ->
-      returnA -< r
