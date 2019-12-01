@@ -122,13 +122,6 @@ newtype Rope (record::RopeRec) (mantle::[Strand]) (core::BinEff) a b =
   deriving (Profunctor, Strong, Choice)
     via Reader (record (Weaver core) mantle) `Cayley` core
 
--- | A 'Rope' over any core that satisfies some constraints.
---
--- NOTE: Given @core@ is maintained universally quantified, a 'Rope' created
--- this way corresponds to the final encoding of the free arrow construction.
-type UniRope cst record mantle a b =
-  forall core. (cst core) => Rope record mantle core a b
-
 -- | A 'Rope' that is "tight", meaning you cannot 'entwine' new 'Strand's to
 -- it. The 'strand' function is @O(1)@ on 'TightRope's whatever the number of
 -- 'Strand's.
@@ -214,7 +207,8 @@ asCore = Rope . const
 -- | Reorders the strands to match some external context. @strands'@ can contain
 -- more elements than @strands@. Note it works on both 'TightRope's and
 -- 'LooseRope's
-retwine :: (RecSubset r strands strands' (RImage strands strands'), RecSubsetFCtx r (Weaver core))
+retwine :: ( RecSubset r strands strands' (RImage strands strands')
+           , RecSubsetFCtx r (Weaver core) )
         => Rope r strands core a b
         -> Rope r strands' core a b
 retwine (Rope f) = Rope $ f . rcast
