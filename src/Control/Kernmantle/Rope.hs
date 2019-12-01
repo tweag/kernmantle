@@ -38,7 +38,7 @@ module Control.Kernmantle.Rope
   , AnyRopeWith
   , Entwines, SatisfiesAll
   , Label, fromLabel
-  , FromUnary
+  , ToSieve
   , type (:->)
   , (&)
 
@@ -46,10 +46,10 @@ module Control.Kernmantle.Rope
   , entwine
   , retwine
   , untwine
-  , runUnaryCore
+  , runSieveCore
   , mergeStrands
   , asCore
-  , unary, unary_
+  , toSieve, toSieve_
   )
 where
 
@@ -61,6 +61,7 @@ import Data.Bifunctor.Tannen
 import Data.Bifunctor.Product
 import Data.Profunctor
 import Data.Profunctor.Cayley
+import Data.Profunctor.Sieve
 import Data.Function ((&))
 import Data.Functor.Identity
 import Data.Typeable
@@ -113,6 +114,7 @@ newtype Rope (record::RopeRec) (mantle::[Strand]) (core::BinEff) a b =
   
   deriving ( Category, Bifunctor
            , Arrow, ArrowChoice, ArrowLoop, ArrowZero, ArrowPlus
+           , Closed, Costrong, Cochoice
            , ThrowEffect ex, TryEffect ex
            )
     via Reader (record (Weaver core) mantle) `Tannen` core
@@ -189,18 +191,19 @@ entwine _ run (Rope f) = Rope $ \r ->
   f (Weaver (\eff -> runRope (run eff) r) :& r)
 {-# INLINE entwine #-}
 
--- | Turns a unary effect into a binary one
-type FromUnary = Kleisli
+-- | A 'Sieve' is a binary effect constructed from a functorial (or monadic)
+-- unary effect.
+type ToSieve = Kleisli
 
--- | Turns a function computing a unary effect to a binary effect
-unary :: (a -> ueff b) -> FromUnary ueff a b
-unary = Kleisli
-{-# INLINE unary #-}
+-- | Turns a function computing a functorial/monadic effect to a binary effect
+toSieve :: (a -> ueff b) -> ToSieve ueff a b
+toSieve = Kleisli
+{-# INLINE toSieve #-}
 
--- | Turns a unary effect into a binary effect
-unary_ :: ueff x -> FromUnary ueff () x
-unary_ = Kleisli . const
-{-# INLINE unary_ #-}
+-- | Turns a functorial/monadic effect into a binary effect
+toSieve_ :: ueff x -> ToSieve ueff () x
+toSieve_ = Kleisli . const
+{-# INLINE toSieve_ #-}
 
 -- | Runs an effect directly in the core. You should use that function only as
 -- part of a call to 'entwine'.
@@ -231,7 +234,9 @@ untwine :: LooseRope '[] core a b -> core a b
 untwine (Rope f) = f RNil
 {-# INLINE untwine #-}
 
--- | Runs a 'Rope' with no strands left when its core is a unary effect.
-runUnaryCore :: a -> LooseRope '[] (FromUnary ueff) a b -> ueff b
-runUnaryCore a r = runKleisli (untwine r) a
-{-# INLINE runUnaryCore #-}
+-- | Runs a 'Rope' with no strands left when its core is a Sieve (ie. is
+-- mappable to a functorial/monadic effect)
+runSieveCore :: (Sieve biEff uEff)
+             => a -> LooseRope '[] biEff a b -> uEff b
+runSieveCore a r = sieve (untwine r) a
+{-# INLINE runSieveCore #-}

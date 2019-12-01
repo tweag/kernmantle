@@ -35,11 +35,13 @@ runFile cmd inp = case cmd of
 
 -- | Just to show the type of runFile once we lift it as part of the 'Rope'
 interpFile :: a `File` b
-           -> AnyRopeWith '[ '("io", FromUnary IO) ] '[] a b
+           -> AnyRopeWith '[ '("io", ToSieve IO) ] '[] a b
               -- We give our list of requirements. Interpreting File effects
-              -- will require an #io Strand to put the IO actions in. No
-              -- requirements on the core.
-interpFile = strand #io . unary . runFile
+              -- will require an #io Strand to put the IO actions in. A "Sieve"
+              -- is a binary effect constructed from a monadic effect, it's the
+              -- prime way to lift IO actions in the Rope. No requirements are
+              -- placed on the core.
+interpFile = strand #io . toSieve . runFile
 
 -- | Just a shortcut to say our program can run in any rope that supports our
 -- effects and whose core implements ArrowChoice and allows us to catch
@@ -74,7 +76,7 @@ main = prog & loosen -- We tell that prog should be a TightRope, and at the same
             & mergeStrands #console #warnConsole
                -- We used a second Console effect for warnings in prog. We
                -- redirect it to #console
-            & entwine #console (strand #io . unary . runConsole)
+            & entwine #console (strand #io . toSieve . runConsole)
                -- runConsole result just runs in IO. So we ask for a new #io
                -- strand to hold the interpreted console effects...
             & entwine #file interpFile
@@ -83,7 +85,7 @@ main = prog & loosen -- We tell that prog should be a TightRope, and at the same
             & entwine #io asCore
                -- ...then set this #io strand to be directly interpreted in the
                -- core...
-            & runUnaryCore "You"
+            & runSieveCore "You"
                -- ...and then we run the core with the input of prog
 
 -- | main details every strand, but we can skip the #io strand and the merging
@@ -91,6 +93,6 @@ main = prog & loosen -- We tell that prog should be a TightRope, and at the same
 altMain :: IO ()
 altMain = prog & loosen
                & mergeStrands #console #warnConsole
-               & entwine #console (asCore . unary . runConsole)
-               & entwine #file (asCore . unary . runFile)
-               & runUnaryCore "You"
+               & entwine #console (asCore . toSieve . runConsole)
+               & entwine #file (asCore . toSieve . runFile)
+               & runSieveCore "You"
