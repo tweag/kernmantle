@@ -40,7 +40,7 @@ module Control.Kernmantle.Rope
   , Entwines, SatisfiesAll
   , Label, fromLabel
   , ToSieve
-  , WithAoTEff
+  , WithAoT
   , type (:->)
   , (&)
 
@@ -52,8 +52,9 @@ module Control.Kernmantle.Rope
   , mergeStrands
   , asCore
   , toSieve, toSieve_
+  , splitRope
 
-  , withAoTEff, entwineAoTEffs
+  , withAoT, entwineAllAoT
   )
 where
 
@@ -269,25 +270,31 @@ toSieve_ = Kleisli . const
 
 type family StrandsWithAoT f mantle where
   StrandsWithAoT f '[] = '[]
-  StrandsWithAoT f ( s ': strands ) = '(StrandName s, StrandEff s `WithAoTEff` f) ': StrandsWithAoT f strands
+  StrandsWithAoT f ( s ': strands ) = '(StrandName s, StrandEff s `WithAoT` f) ': StrandsWithAoT f strands
 
 weaverThroughAoT :: (Functor f)
                  => Weaver core s
-                 -> Weaver (core `WithAoTEff` f) '(StrandName s, StrandEff s `WithAoTEff` f)
+                 -> Weaver (core `WithAoT` f) '(StrandName s, StrandEff s `WithAoT` f)
 weaverThroughAoT (Weaver w) = Weaver $ Tannen . fmap w . runTannen
 {-# INLINE weaverThroughAoT #-}
 
 ropeRecThroughAoT :: (Functor f)
                   => Rec (Weaver core) strands
-                  -> Rec (Weaver (core `WithAoTEff` f)) (StrandsWithAoT f strands)
+                  -> Rec (Weaver (core `WithAoT` f)) (StrandsWithAoT f strands)
 ropeRecThroughAoT RNil = RNil
 ropeRecThroughAoT (w :& rest) = weaverThroughAoT w :& ropeRecThroughAoT rest
 
 -- | When all the strands of a 'Rope' have the same type of ahead of time
 -- effects, we can run them. See 'splitRope' to isolate some strands in a 'Rope'
-entwineAoTEffs :: (Functor f)
-               => (forall x y. f (core x y) -> core x y)
-               -> LooseRope (StrandsWithAoT f strands) (core `WithAoTEff` f) a b
-               -> LooseRope strands core a b
-entwineAoTEffs run (Rope f) = Rope $ \r -> run $ runTannen $ f $ ropeRecThroughAoT r
-{-# INLINE entwineAoTEffs #-}
+entwineAllAoT :: (Functor f)
+              => (forall x y. f (core x y) -> core x y)
+              -> LooseRope (StrandsWithAoT f strands) (core `WithAoT` f) a b
+              -> LooseRope strands core a b
+entwineAllAoT run (Rope f) = Rope $ \r -> run $ runTannen $ f $ ropeRecThroughAoT r
+{-# INLINE entwineAllAoT #-}
+
+withEntwinedAoT :: (Functor f)
+                => (forall x y. f (core x y) -> core x y)
+                -> (LooseRope strands core -> LooseRope otherStrands core)
+                -> LooseRope (StrandsWithAoT f strandsAoT ++ otherStrands) (core `WithAoT` f) a b
+                -> LooseRope otherStrands core a b

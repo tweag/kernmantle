@@ -15,7 +15,7 @@ import Data.Bifunctor.Tannen
 -- that should be executed /before/ we get to the binary effect. These
 -- ahead-of-time effects can be CLI parsing, access to some configuration,
 -- pre-processing of the compute graph, etc.
-type WithAoTEff a f = Tannen f a
+type WithAoT a f = Tannen f a
 
-withAoTEff :: f (eff x y) -> (eff `WithAoTEff` f) x y
-withAoTEff = Tannen
+withAoT :: f (eff x y) -> (eff `WithAoT` f) x y
+withAoT = Tannen
