@@ -14,6 +14,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 -- | A 'Rope' connects together various effect 'Strand's that get interlaced
 -- together.
@@ -120,19 +121,34 @@ mapWeaverCore f (Weaver w) = Weaver $ f . w
 -- (ie. effects with kind * -> * -> *). These effects are called 'Strand's, they
 -- compose the @mantle@, and they can be interlaced "on top" of an existing
 -- @core@ effect.
-newtype Rope (record::RopeRec) (mantle::[Strand]) (core::BinEff) a b =
-  Rope
-    { runRope :: record (Weaver core) mantle -> core a b }
+newtype RopeRunner (record::RopeRec) (mantle::[Strand]) (interp::BinEff) (core::BinEff) a b =
+  RopeRunner (record (Weaver interp) mantle -> core a b)
   
   deriving ( Category, Bifunctor
            , Arrow, ArrowChoice, ArrowLoop, ArrowZero, ArrowPlus
            , Closed, Costrong, Cochoice
            , ThrowEffect ex, TryEffect ex
            )
-    via Reader (record (Weaver core) mantle) `Tannen` core
+    via Reader (record (Weaver interp) mantle) `Tannen` core
 
   deriving (Profunctor, Strong, Choice)
-    via Reader (record (Weaver core) mantle) `Cayley` core
+    via Reader (record (Weaver interp) mantle) `Cayley` core
+
+newtype Rope record mantle core a b = Rope (RopeRunner record mantle core core a b)
+  deriving ( Category, Bifunctor
+           , Arrow, ArrowChoice, ArrowLoop, ArrowZero, ArrowPlus
+           , Closed, Costrong, Cochoice
+           , ThrowEffect ex, TryEffect ex
+           , Profunctor, Strong, Choice
+           )
+
+runRope :: Rope record mantle core a b -> record (Weaver core) mantle -> core a b
+runRope (Rope (RopeRunner f)) = f
+{-# INLINE runRope #-}
+
+mkRope :: (record (Weaver core) mantle -> core a b) -> Rope record mantle core a b
+mkRope = Rope . RopeRunner
+{-# INLINE mkRope #-}
 
 -- | A 'Rope' that is "tight", meaning you cannot 'entwine' new 'Strand's to
 -- it. The 'strand' function is @O(1)@ on 'TightRope's whatever the number of
@@ -152,7 +168,7 @@ class InRope l eff rope where
 instance ( HasField record l mantle mantle eff eff
          , RecElemFCtx record (Weaver core) )
   => InRope l eff (Rope record mantle core) where
-  strand l eff = Rope $ \r -> weaveStrand (rgetf l r) eff
+  strand l eff = mkRope $ \r -> weaveStrand (rgetf l r) eff
   {-# INLINE strand #-}
 
 -- | Tells whether a collection of @strands@ is in a 'Rope'
@@ -174,13 +190,13 @@ type AnyRopeWith strands coreConstraints a b = forall s r c.
 -- | Turn a 'LooseRope' into a 'TightRope'
 tighten :: (RecApplicative m, RPureConstrained (IndexableField m) m)
         => LooseRope m core a b -> TightRope m core a b
-tighten (Rope f) = Rope $ f . fromARec
+tighten r = mkRope $ runRope r . fromARec
 {-# INLINE tighten #-}
 
 -- | Turn a 'TightRope' into a 'LooseRope'
 loosen :: (NatToInt (RLength m))
        => TightRope m core a b -> LooseRope m core a b
-loosen (Rope f) = Rope $ f . toARec
+loosen r = mkRope $ runRope r . toARec
 {-# INLINE loosen #-}
 
 -- | Adds a new effect strand in the 'Rope'. Users of that function should
@@ -192,14 +208,14 @@ entwine :: Label name  -- ^ Give a name to the strand
         -> LooseRope ('(name,binEff) ': mantle) core a b -- ^ The 'Rope' with an extra effect strand
         -> LooseRope mantle core a b -- ^ The 'Rope' with the extra effect strand
                                      -- woven in the core
-entwine _ run (Rope f) = Rope $ \r ->
-  f (Weaver (\eff -> runRope (run eff) r) :& r)
+entwine _ run rope = mkRope $ \r ->
+  runRope rope (Weaver (\eff -> runRope (run eff) r) :& r)
 {-# INLINE entwine #-}
 
 -- | Runs an effect directly in the core. You should use that function only as
 -- part of a call to 'entwine'.
 asCore :: core x y -> Rope r mantle core x y
-asCore = Rope . const
+asCore = mkRope . const
 {-# INLINE asCore #-}
 
 -- | Indicates that @strands@ can be reordered and considered a subset of
@@ -214,15 +230,15 @@ type RetwinableAs record strands core strands' =
 retwine :: (RetwinableAs r strands core strands')
         => Rope r strands core a b
         -> Rope r strands' core a b
-retwine (Rope f) = Rope $ f . rcast
+retwine r = mkRope $ runRope r . rcast
 {-# INLINE retwine #-}
 
 -- | Splits a 'Rope' in two parts, so we can select several strands to act on
 splitRope :: (RMap mantle1)
           => LooseRope (mantle1 ++ mantle2) core a b
           -> LooseRope mantle1 (LooseRope mantle2 core) a b
-splitRope (Rope f) = Rope $ \r1 -> Rope $ \r2 ->
-  f $ rmap (mapWeaverCore (flip runRope r2)) r1 `rappend` r2
+splitRope rope = mkRope $ \r1 -> mkRope $ \r2 ->
+  runRope rope $ rmap (mapWeaverCore (flip runRope r2)) r1 `rappend` r2
 
 -- -- API-wise, it'd be better if splitRope could be reformulated as the
 -- -- following, but that seems harder to implement:
@@ -235,13 +251,13 @@ mergeStrands :: Label n1
              -> Label n2
              -> LooseRope ( '(n1,binEff) ': '(n2,binEff) ': mantle ) core a b
              -> LooseRope ( '(n1,binEff) ': mantle ) core a b
-mergeStrands _ _ (Rope f) = Rope $ \(r@(Weaver w) :& rest) ->
-  f (r :& Weaver w :& rest)
+mergeStrands _ _ rope = mkRope $ \(r@(Weaver w) :& rest) ->
+  runRope rope (r :& Weaver w :& rest)
 {-# INLINE mergeStrands #-}
 
 -- | Strips a 'Rope' of its empty mantel.
 untwine :: LooseRope '[] core a b -> core a b
-untwine (Rope f) = f RNil
+untwine r = runRope r RNil
 {-# INLINE untwine #-}
 
 
@@ -290,11 +306,11 @@ entwineAllAoT :: (Functor f)
               => (forall x y. f (core x y) -> core x y)
               -> LooseRope (StrandsWithAoT f strands) (core `WithAoT` f) a b
               -> LooseRope strands core a b
-entwineAllAoT run (Rope f) = Rope $ \r -> run $ runTannen $ f $ ropeRecThroughAoT r
+entwineAllAoT run rope = mkRope $ \r -> run $ runTannen $ runRope rope $ ropeRecThroughAoT r
 {-# INLINE entwineAllAoT #-}
 
-withEntwinedAoT :: (Functor f)
-                => (forall x y. f (core x y) -> core x y)
-                -> (LooseRope strands core -> LooseRope otherStrands core)
-                -> LooseRope (StrandsWithAoT f strandsAoT ++ otherStrands) (core `WithAoT` f) a b
-                -> LooseRope otherStrands core a b
+-- withEntwinedAoT :: (Functor f)
+--                 => (forall x y. f (core x y) -> core x y)
+--                 -> (LooseRope strands core -> LooseRope otherStrands core)
+--                 -> LooseRope (StrandsWithAoT f strandsAoT ++ otherStrands) (core `WithAoT` f) a b
+--                 -> LooseRope otherStrands core a b
