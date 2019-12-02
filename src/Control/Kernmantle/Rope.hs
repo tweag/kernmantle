@@ -13,6 +13,7 @@
 {-# LANGUAGE OverloadedLabels #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 -- | A 'Rope' connects together various effect 'Strand's that get interlaced
 -- together.
@@ -39,6 +40,7 @@ module Control.Kernmantle.Rope
   , Entwines, SatisfiesAll
   , Label, fromLabel
   , ToSieve
+  , WithAoTEff
   , type (:->)
   , (&)
 
@@ -50,6 +52,8 @@ module Control.Kernmantle.Rope
   , mergeStrands
   , asCore
   , toSieve, toSieve_
+
+  , withAoTEff, entwineAoTEffs
   )
 where
 
@@ -67,6 +71,7 @@ import Data.Functor.Identity
 import Data.Typeable
 import Data.Vinyl hiding ((<+>))
 import Data.Vinyl.ARec
+import Data.Vinyl.Functor
 import Data.Vinyl.TypeLevel
 import GHC.Exts
 import GHC.TypeLits
@@ -74,6 +79,7 @@ import GHC.OverloadedLabels
 
 import Prelude hiding (id, (.))
 
+import Control.Kernmantle.AoTEffects
 import Control.Kernmantle.Error
 
 
@@ -103,6 +109,11 @@ type RopeRec = (Strand -> *) -> [Strand] -> *
 -- because that's what is expect by the 'RopeRec'
 newtype Weaver (core::BinEff) (strand::Strand) = Weaver
   { weaveStrand :: StrandEff strand :-> core }
+
+mapWeaverCore :: (core :-> core')
+              -> Weaver core strands -> Weaver core' strands
+mapWeaverCore f (Weaver w) = Weaver $ f . w
+{-# INLINE mapWeaverCore #-}
 
 -- | 'Rope' is a free arrow built out of _several_ binary effects
 -- (ie. effects with kind * -> * -> *). These effects are called 'Strand's, they
@@ -210,10 +221,13 @@ splitRope :: (RMap mantle1)
           => LooseRope (mantle1 ++ mantle2) core a b
           -> LooseRope mantle1 (LooseRope mantle2 core) a b
 splitRope (Rope f) = Rope $ \r1 -> Rope $ \r2 ->
-  f $ rmap (runWith r2) r1 `rappend` r2
-  where
-    runWith r (Weaver toInnerRope) = Weaver $ \strand ->
-        runRope (toInnerRope strand) r
+  f $ rmap (mapWeaverCore (flip runRope r2)) r1 `rappend` r2
+
+-- -- API-wise, it'd be better if splitRope could be reformulated as the
+-- -- following, but that seems harder to implement:
+-- groupStrands :: LooseRope (mantle1 ++ mantle2) core a b
+--              -> LooseRope ('(name,LooseRope mantle1 core) ': mantle2) core a b
+-- groupStrands (Rope f) = Rope $ \(Weaver subrope :& r) ->  
 
 -- | Merge two strands that have the same effect type. Keeps the first name.
 mergeStrands :: Label n1
@@ -253,15 +267,27 @@ toSieve_ :: ueff x -> ToSieve ueff () x
 toSieve_ = Kleisli . const
 {-# INLINE toSieve_ #-}
 
--- | Adds some ahead-of-time (functorial) unary effects to any binary effect,
--- that should be executed /before/ we get to the binary effect. These
--- ahead-of-time effects can be CLI parsing, access to some configuration,
--- pre-processing of the compute graph, etc.
-type WithAoTEff a f = Tannen f a
+type family StrandsWithAoT f mantle where
+  StrandsWithAoT f '[] = '[]
+  StrandsWithAoT f ( s ': strands ) = '(StrandName s, StrandEff s `WithAoTEff` f) ': StrandsWithAoT f strands
 
--- | When you have a functorial effect returning a, register it as ahead-of-time
--- effect to be executed /before/ eff can be executed. Ahead-of-time effects can
--- be merged together if @f@ is 'Applicative'
-withAoTEff :: f (eff x y) -> (eff `WithAoTEff` f) x y
-withAoTEff = Tannen
-{-# INLINE withAoTEff #-}
+weaverThroughAoT :: (Functor f)
+                 => Weaver core s
+                 -> Weaver (core `WithAoTEff` f) '(StrandName s, StrandEff s `WithAoTEff` f)
+weaverThroughAoT (Weaver w) = Weaver $ Tannen . fmap w . runTannen
+{-# INLINE weaverThroughAoT #-}
+
+ropeRecThroughAoT :: (Functor f)
+                  => Rec (Weaver core) strands
+                  -> Rec (Weaver (core `WithAoTEff` f)) (StrandsWithAoT f strands)
+ropeRecThroughAoT RNil = RNil
+ropeRecThroughAoT (w :& rest) = weaverThroughAoT w :& ropeRecThroughAoT rest
+
+-- | When all the strands of a 'Rope' have the same type of ahead of time
+-- effects, we can run them. See 'splitRope' to isolate some strands in a 'Rope'
+entwineAoTEffs :: (Functor f)
+               => (forall x y. f (core x y) -> core x y)
+               -> LooseRope (StrandsWithAoT f strands) (core `WithAoTEff` f) a b
+               -> LooseRope strands core a b
+entwineAoTEffs run (Rope f) = Rope $ \r -> run $ runTannen $ f $ ropeRecThroughAoT r
+{-# INLINE entwineAoTEffs #-}
