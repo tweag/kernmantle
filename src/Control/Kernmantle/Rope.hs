@@ -4,6 +4,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE FlexibleInstances #-}
@@ -53,9 +54,8 @@ module Control.Kernmantle.Rope
   , mergeStrands
   , asCore
   , toSieve, toSieve_
-  , splitRope
 
-  , withAoT, entwineAllAoT
+  , withAoT
   )
 where
 
@@ -106,21 +106,21 @@ type family StrandEff t where
 -- most often be @Weaver someCore@
 type RopeRec = (Strand -> *) -> [Strand] -> *
 
--- | Runs one "mantle" strand (* -> * -> * effect) in a "core" strand. Is
--- parameterized over a Strand even if it ignores its name internally
--- because that's what is expect by the 'RopeRec'
-newtype Weaver (core::BinEff) (strand::Strand) = Weaver
-  { weaveStrand :: StrandEff strand :-> core }
+-- | Runs one @strand@ (* -> * -> * effect) in a @interp@ effect. Is
+-- parameterized over a Strand (and not just a BinEffect) even if it ignores its
+-- name internally because that's what is expect by the 'RopeRec'
+newtype Weaver (interp::BinEff) (strand::Strand) = Weaver
+  { weaveStrand :: StrandEff strand :-> interp }
 
-mapWeaverCore :: (core :-> core')
-              -> Weaver core strands -> Weaver core' strands
-mapWeaverCore f (Weaver w) = Weaver $ f . w
-{-# INLINE mapWeaverCore #-}
+mapWeaverInterp :: (interp :-> interp')
+                -> Weaver interp strands -> Weaver interp' strands
+mapWeaverInterp f (Weaver w) = Weaver $ f . w
+{-# INLINE mapWeaverInterp #-}
 
--- | 'Rope' is a free arrow built out of _several_ binary effects
--- (ie. effects with kind * -> * -> *). These effects are called 'Strand's, they
--- compose the @mantle@, and they can be interlaced "on top" of an existing
--- @core@ effect.
+-- | 'Rope' is a free arrow built out of _several_ binary effects (ie. effects
+-- with kind * -> * -> *). These effects are called 'Strand's, they compose the
+-- @mantle@, can be interpreted in an @interp@ effect and can be interlaced "on
+-- top" of an existing @core@ effect.
 newtype RopeRunner (record::RopeRec) (mantle::[Strand]) (interp::BinEff) (core::BinEff) a b =
   RopeRunner (record (Weaver interp) mantle -> core a b)
   
@@ -133,6 +133,16 @@ newtype RopeRunner (record::RopeRec) (mantle::[Strand]) (interp::BinEff) (core::
 
   deriving (Profunctor, Strong, Choice)
     via Reader (record (Weaver interp) mantle) `Cayley` core
+
+-- | A 'RopeRunner' is actually a profunctor over binary effects
+dimapRopeRunner :: (RMap m)
+                => (interp :-> interp')
+                -> (core :-> core')
+                -> RopeRunner Rec m interp' core
+               :-> RopeRunner Rec m interp  core'
+dimapRopeRunner f g (RopeRunner run) = RopeRunner $
+  g . run . rmap (mapWeaverInterp f)
+{-# INLINE dimapRopeRunner #-}
 
 newtype Rope record mantle core a b = Rope (RopeRunner record mantle core core a b)
   deriving ( Category, Bifunctor
@@ -233,12 +243,11 @@ retwine :: (RetwinableAs r strands core strands')
 retwine r = mkRope $ runRope r . rcast
 {-# INLINE retwine #-}
 
--- | Splits a 'Rope' in two parts, so we can select several strands to act on
-splitRope :: (RMap mantle1)
-          => LooseRope (mantle1 ++ mantle2) core a b
-          -> LooseRope mantle1 (LooseRope mantle2 core) a b
-splitRope rope = mkRope $ \r1 -> mkRope $ \r2 ->
-  runRope rope $ rmap (mapWeaverCore (flip runRope r2)) r1 `rappend` r2
+-- | Splits a 'RopeRunner' in two parts, so we can select several strands to act on
+splitRopeRunner :: RopeRunner Rec (mantle1 ++ mantle2) interp core a b
+                -> RopeRunner Rec mantle1 interp (RopeRunner Rec mantle2 interp core) a b
+splitRopeRunner (RopeRunner f) = RopeRunner $ \r1 -> RopeRunner $ \r2 ->
+  f $ r1 `rappend` r2
 
 -- -- API-wise, it'd be better if splitRope could be reformulated as the
 -- -- following, but that seems harder to implement:
@@ -284,33 +293,36 @@ toSieve_ :: ueff x -> ToSieve ueff () x
 toSieve_ = Kleisli . const
 {-# INLINE toSieve_ #-}
 
-type family StrandsWithAoT f mantle where
-  StrandsWithAoT f '[] = '[]
-  StrandsWithAoT f ( s ': strands ) = '(StrandName s, StrandEff s `WithAoT` f) ': StrandsWithAoT f strands
+-- | Wrap each strand effect inside a type constructor
+type family MapStrandEffs f mantle where
+  MapStrandEffs f '[] = '[]
+  MapStrandEffs f ( s ': strands ) = '(StrandName s, f (StrandEff s)) ': MapStrandEffs f strands
 
-weaverThroughAoT :: (Functor f)
-                 => Weaver core s
-                 -> Weaver (core `WithAoT` f) '(StrandName s, StrandEff s `WithAoT` f)
-weaverThroughAoT (Weaver w) = Weaver $ Tannen . fmap w . runTannen
-{-# INLINE weaverThroughAoT #-}
+class WrapperEff f where
+  wrapWeaver :: Weaver interp s
+             -> Weaver (f interp) '(StrandName s, f (StrandEff s))
 
-ropeRecThroughAoT :: (Functor f)
-                  => Rec (Weaver core) strands
-                  -> Rec (Weaver (core `WithAoT` f)) (StrandsWithAoT f strands)
-ropeRecThroughAoT RNil = RNil
-ropeRecThroughAoT (w :& rest) = weaverThroughAoT w :& ropeRecThroughAoT rest
+instance (Functor f) => WrapperEff (Tannen f) where
+  wrapWeaver (Weaver w) = Weaver $ Tannen . fmap w . runTannen
+  {-# INLINE wrapWeaver #-}
+
+wrapRopeRec :: (WrapperEff f)
+            => Rec (Weaver interp) strands
+            -> Rec (Weaver (f interp)) (MapStrandEffs f strands)
+wrapRopeRec RNil = RNil
+wrapRopeRec (w :& rest) = wrapWeaver w :& wrapRopeRec rest
 
 -- | When all the strands of a 'Rope' have the same type of ahead of time
 -- effects, we can run them. See 'splitRope' to isolate some strands in a 'Rope'
-entwineAllAoT :: (Functor f)
-              => (forall x y. f (core x y) -> core x y)
-              -> LooseRope (StrandsWithAoT f strands) (core `WithAoT` f) a b
-              -> LooseRope strands core a b
-entwineAllAoT run rope = mkRope $ \r -> run $ runTannen $ runRope rope $ ropeRecThroughAoT r
-{-# INLINE entwineAllAoT #-}
+unwrapRopeRunner :: (WrapperEff f)
+                 => RopeRunner Rec (MapStrandEffs f strands) (f core) core a b
+                 -> RopeRunner Rec strands core core a b
+unwrapRopeRunner (RopeRunner f) = RopeRunner $ f . wrapRopeRec
+{-# INLINE unwrapRopeRunner #-}
 
--- withEntwinedAoT :: (Functor f)
---                 => (forall x y. f (core x y) -> core x y)
---                 -> (LooseRope strands core -> LooseRope otherStrands core)
---                 -> LooseRope (StrandsWithAoT f strandsAoT ++ otherStrands) (core `WithAoT` f) a b
---                 -> LooseRope otherStrands core a b
+unwrapSomeStrands :: (WrapperEff f, RMap (MapStrandEffs f mantle1))
+                  => (f core' :-> interp)
+                  -> (RopeRunner Rec mantle2 interp core :-> core')
+                  -> RopeRunner Rec (MapStrandEffs f mantle1 ++ mantle2) interp core
+                 :-> RopeRunner Rec mantle1                              core'  core'
+unwrapSomeStrands f g = unwrapRopeRunner . dimapRopeRunner f g . splitRopeRunner
