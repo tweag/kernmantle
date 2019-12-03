@@ -28,14 +28,10 @@
 -- that 'Strand' with the 'strand' function.
 
 module Control.Kernmantle.Rope
-  ( Product(..)
-  , Tannen(..)
-  , Kleisli(..)
-  , Rope(..)
+  ( Rope
   , TightRope, LooseRope
-  , BinEff, Strand, RopeRec
+  , BinEff, Strand
   , StrandName, StrandEff
-  , Weaver(..)
   , InRope(..)
   , AnyRopeWith
   , Entwines, SatisfiesAll
@@ -44,7 +40,6 @@ module Control.Kernmantle.Rope
   , WithAoT
   , type (:->)
   , (&)
-
 
   , tighten, loosen
   , entwine
@@ -66,17 +61,14 @@ import Control.Category
 import Control.Arrow
 import Data.Bifunctor
 import Data.Bifunctor.Tannen
-import Data.Bifunctor.Product
 import Data.Function ((&))
 import Data.Profunctor hiding (rmap)
 import Data.Profunctor.Sieve
-import Data.Typeable
 import Data.Vinyl hiding ((<+>))
 import Data.Vinyl.ARec
 import Data.Vinyl.Functor
 import Data.Vinyl.TypeLevel
 import GHC.Exts
-import GHC.TypeLits
 import GHC.OverloadedLabels
 
 import Prelude hiding (id, (.))
