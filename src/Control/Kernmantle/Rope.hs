@@ -83,6 +83,7 @@ import Prelude hiding (id, (.))
 
 import Control.Kernmantle.AoTEffects
 import Control.Kernmantle.Error
+import Control.Kernmantle.Functors
 
 
 -- | The kind for all binary effects. First param is usually an input
@@ -113,14 +114,11 @@ newtype Weaver (interp::BinEff) (strand::Strand) = Weaver
   { weaveStrand :: StrandEff strand :-> interp }
 
 mapWeaverInterp :: (interp :-> interp')
-                -> Weaver interp strands -> Weaver interp' strands
+                -> Weaver interp strand
+                -> Weaver interp' strand
 mapWeaverInterp f (Weaver w) = Weaver $ f . w
 {-# INLINE mapWeaverInterp #-}
 
--- | 'Rope' is a free arrow built out of _several_ binary effects (ie. effects
--- with kind * -> * -> *). These effects are called 'Strand's, they compose the
--- @mantle@, can be interpreted in an @interp@ effect and can be interlaced "on
--- top" of an existing @core@ effect.
 newtype RopeRunner (record::RopeRec) (mantle::[Strand]) (interp::BinEff) (core::BinEff) a b =
   RopeRunner (record (Weaver interp) mantle -> core a b)
   
@@ -134,16 +132,15 @@ newtype RopeRunner (record::RopeRec) (mantle::[Strand]) (interp::BinEff) (core::
   deriving (Profunctor, Strong, Choice)
     via Reader (record (Weaver interp) mantle) `Cayley` core
 
--- | A 'RopeRunner' is actually a profunctor over binary effects
-dimapRopeRunner :: (RMap m)
-                => (interp :-> interp')
-                -> (core :-> core')
-                -> RopeRunner Rec m interp' core
-               :-> RopeRunner Rec m interp  core'
-dimapRopeRunner f g (RopeRunner run) = RopeRunner $
-  g . run . rmap (mapWeaverInterp f)
-{-# INLINE dimapRopeRunner #-}
+instance (RMap m) => EffProfunctor (RopeRunner Rec m) where
+  effdimap f g (RopeRunner run) = RopeRunner $
+    g . run . rmap (mapWeaverInterp f)
+  {-# INLINE effdimap #-}
 
+-- | 'Rope' is a free arrow built out of _several_ binary effects (ie. effects
+-- with kind * -> * -> *). These effects are called 'Strand's, they compose the
+-- @mantle@, can be interpreted in an @interp@ effect and can be interlaced "on
+-- top" of an existing @core@ effect.
 newtype Rope record mantle core a b = Rope (RopeRunner record mantle core core a b)
   deriving ( Category, Bifunctor
            , Arrow, ArrowChoice, ArrowLoop, ArrowZero, ArrowPlus
@@ -298,24 +295,6 @@ type family MapStrandEffs f mantle where
   MapStrandEffs f '[] = '[]
   MapStrandEffs f ( s ': strands ) = '(StrandName s, f (StrandEff s)) ': MapStrandEffs f strands
 
--- | Functors over binary effects. Same as the ProfunctorFunctor class from
--- @profunctors@ but with less requirements over mapped effs
-class EffFunctor f where
-  effmap :: (eff :-> eff') -> f eff :-> f eff'
-
--- | Pointed Functors (= functors equipped with 'pure') over binary
--- effects. Doesn't have an equivalent afaik in @profunctors@.
-class (EffFunctor f) => EffPointedFunctor f where
-  effpure :: eff :-> f eff
-
-instance (Functor f) => EffFunctor (Tannen f) where
-  effmap f = Tannen . fmap f . runTannen
-  {-# INLINE effmap #-}
-
-instance (Applicative f) => EffPointedFunctor (Tannen f) where
-  effpure = Tannen . pure
-  {-# INLINE effpure #-}
-
 effmapRopeRec :: (EffFunctor f)
               => Rec (Weaver interp) strands
               -> Rec (Weaver (f interp)) (MapStrandEffs f strands)
@@ -341,5 +320,5 @@ unwrapSomeStrands :: (EffFunctor f, RMap (MapStrandEffs f mantle1))
                      -- are wrapped in the @f@ EffFunctor
                  :-> RopeRunner Rec mantle1                              core'  core'
                      -- ^ The resulting 'RopeRunner', where 
-unwrapSomeStrands f g = unwrapRopeRunner . dimapRopeRunner f g . splitRopeRunner
+unwrapSomeStrands f g = unwrapRopeRunner . effdimap f g . splitRopeRunner
 {-# INLINE unwrapSomeStrands #-}
