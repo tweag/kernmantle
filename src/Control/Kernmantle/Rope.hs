@@ -81,7 +81,6 @@ import GHC.OverloadedLabels
 
 import Prelude hiding (id, (.))
 
-import Control.Kernmantle.AoTEffects
 import Control.Kernmantle.Error
 import Control.Kernmantle.Functors
 
