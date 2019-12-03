@@ -169,7 +169,7 @@ type LooseRope = Rope Rec
 class InRope l eff rope where
   -- | Lifts a binary effect in the 'Rope'. Performance should be better with a
   -- 'TightRope' than with a 'LooseRope', unless you have very few 'Strand's.
-  strand :: Label l -> eff a b -> rope a b
+  strand :: Label l -> eff :-> rope
 
 instance ( HasField record l mantle mantle eff eff
          , RecElemFCtx record (Weaver core) )
@@ -195,13 +195,13 @@ type AnyRopeWith strands coreConstraints a b = forall s r c.
 
 -- | Turn a 'LooseRope' into a 'TightRope'
 tighten :: (RecApplicative m, RPureConstrained (IndexableField m) m)
-        => LooseRope m core a b -> TightRope m core a b
+        => LooseRope m core :-> TightRope m core
 tighten r = mkRope $ runRope r . fromARec
 {-# INLINE tighten #-}
 
 -- | Turn a 'TightRope' into a 'LooseRope'
 loosen :: (NatToInt (RLength m))
-       => TightRope m core a b -> LooseRope m core a b
+       => TightRope m core :-> LooseRope m core
 loosen r = mkRope $ runRope r . toARec
 {-# INLINE loosen #-}
 
@@ -209,10 +209,14 @@ loosen r = mkRope $ runRope r . toARec
 -- normally not place constraints on the core or instanciate it. Rather,
 -- requirement of the execution function should be expressed in terms of other
 -- effects of the @mantle@.
+--
+-- @(a :-> b)@ is the type function from an effect @a@ to an effect @b@
+-- preserving the input/output type params of these effects. It allows us to
+-- elude the two type parameters of these effects, but these are still here.
 entwine :: Label name  -- ^ Give a name to the strand
         -> (binEff :-> LooseRope mantle core) -- ^ The execution function
-        -> LooseRope ('(name,binEff) ': mantle) core a b -- ^ The 'Rope' with an extra effect strand
-        -> LooseRope mantle core a b -- ^ The 'Rope' with the extra effect strand
+        -> LooseRope ('(name,binEff) ': mantle) core -- ^ The 'Rope' with an extra effect strand
+       :-> LooseRope mantle core -- ^ The 'Rope' with the extra effect strand
                                      -- woven in the core
 entwine _ run rope = mkRope $ \r ->
   runRope rope (Weaver (\eff -> runRope (run eff) r) :& r)
@@ -220,7 +224,7 @@ entwine _ run rope = mkRope $ \r ->
 
 -- | Runs an effect directly in the core. You should use that function only as
 -- part of a call to 'entwine'.
-asCore :: core x y -> Rope r mantle core x y
+asCore :: core :-> Rope r mantle core
 asCore = mkRope . const
 {-# INLINE asCore #-}
 
@@ -234,21 +238,21 @@ type RetwinableAs record strands core strands' =
 -- more elements than @strands@. Note it works on both 'TightRope's and
 -- 'LooseRope's
 retwine :: (RetwinableAs r strands core strands')
-        => Rope r strands core a b
-        -> Rope r strands' core a b
+        => Rope r strands core
+       :-> Rope r strands' core
 retwine r = mkRope $ runRope r . rcast
 {-# INLINE retwine #-}
 
 -- | Splits a 'RopeRunner' in two parts, so we can select several strands to act on
-splitRopeRunner :: RopeRunner Rec (mantle1 ++ mantle2) interp core a b
-                -> RopeRunner Rec mantle1 interp (RopeRunner Rec mantle2 interp core) a b
+splitRopeRunner :: RopeRunner Rec (mantle1 ++ mantle2) interp core
+               :-> RopeRunner Rec mantle1 interp (RopeRunner Rec mantle2 interp core)
 splitRopeRunner (RopeRunner f) = RopeRunner $ \r1 -> RopeRunner $ \r2 ->
   f $ r1 `rappend` r2
 
 joinRopeRunner :: (RetwinableAs r mantle1 interp mantle
                   ,RetwinableAs r mantle2 interp mantle)
-               => RopeRunner r mantle1 interp (RopeRunner r mantle2 interp core) a b
-               -> RopeRunner r mantle interp core a b
+               => RopeRunner r mantle1 interp (RopeRunner r mantle2 interp core)
+              :-> RopeRunner r mantle interp core
 joinRopeRunner (RopeRunner f) = RopeRunner $ \r -> case f (rcast r) of
   RopeRunner f' -> f' (rcast r)
 
@@ -261,14 +265,14 @@ joinRopeRunner (RopeRunner f) = RopeRunner $ \r -> case f (rcast r) of
 -- | Merge two strands that have the same effect type. Keeps the first name.
 mergeStrands :: Label n1
              -> Label n2
-             -> LooseRope ( '(n1,binEff) ': '(n2,binEff) ': mantle ) core a b
-             -> LooseRope ( '(n1,binEff) ': mantle ) core a b
+             -> LooseRope ( '(n1,binEff) ': '(n2,binEff) ': mantle ) core
+            :-> LooseRope ( '(n1,binEff) ': mantle ) core
 mergeStrands _ _ rope = mkRope $ \(r@(Weaver w) :& rest) ->
   runRope rope (r :& Weaver w :& rest)
 {-# INLINE mergeStrands #-}
 
 -- | Strips a 'Rope' of its empty mantel.
-untwine :: LooseRope '[] core a b -> core a b
+untwine :: LooseRope '[] core :-> core
 untwine r = runRope r RNil
 {-# INLINE untwine #-}
 
