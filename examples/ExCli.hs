@@ -5,11 +5,11 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE DerivingVia #-}
+{-# LANGUAGE DeriveFunctor #-}
 
 -- | In this example, we show how to condition some strand based on
 -- ahead-of-time effects (here CLI parsing) which just need to instanciate
--- Applicative
+-- Functor
 
 import Control.Kernmantle.Error
 import Control.Kernmantle.Rope
@@ -63,7 +63,7 @@ data VerbLevel = Silent | Error | Warning | Info
 
 -- | An AoT effect to deactivate some effects depending on some verbosity level
 newtype VerbControl a = WithVerbCtrl (VerbLevel -> a)
-  deriving (Functor, Applicative) via ((->) VerbLevel)
+  deriving (Functor)
 
 -- | Controls the verbosity level before logging in a 'Console' effect
 logS :: VerbLevel   -- ^ Minimal verbosity

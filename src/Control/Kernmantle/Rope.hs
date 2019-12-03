@@ -227,7 +227,7 @@ entwineEffFunctors f g (Rope rnr) = Rope $ unwrapSomeStrands f (g . Rope) rnr
 {-# INLINE entwineEffFunctors #-}
 
 withDecomposedEffects
-  :: (EffPointedFunctor f, RMap (MapStrandEffs f mantle1))
+  :: (EffFunctor f, RMap (MapStrandEffs f mantle1))
   => (f core :-> core)  -- ^ Run the wrapper effects (in the core)
   -> (LooseRope mantle1 core :-> LooseRope rest core)
      -- ^ Run the effects that were wrapped with the wrapper
@@ -247,7 +247,7 @@ withDecomposedEffects runWrapper runMantle1 runMantle2 =
 -- simple, it forces either to run everything at once, or to do some trickery by
 -- returning some effecting in the core. We should try to improve that.
 withDecomposedAoTs
-  :: (Applicative f, RMap (MapStrandEffs (Tannen f) mantle1))
+  :: (Functor f, RMap (MapStrandEffs (Tannen f) mantle1))
   => (forall x y. f (core x y) -> core x y)  -- ^ Run the wrapper effects (in the core)
   -> (LooseRope mantle1 core :-> LooseRope rest core)
      -- ^ Run the effects that were wrapped with the wrapper
