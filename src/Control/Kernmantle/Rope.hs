@@ -298,31 +298,48 @@ type family MapStrandEffs f mantle where
   MapStrandEffs f '[] = '[]
   MapStrandEffs f ( s ': strands ) = '(StrandName s, f (StrandEff s)) ': MapStrandEffs f strands
 
-class WrapperEff f where
-  wrapWeaver :: Weaver interp s
-             -> Weaver (f interp) '(StrandName s, f (StrandEff s))
+-- | Functors over binary effects. Same as the ProfunctorFunctor class from
+-- @profunctors@ but with less requirements over mapped effs
+class EffFunctor f where
+  effmap :: (eff :-> eff') -> f eff :-> f eff'
 
-instance (Functor f) => WrapperEff (Tannen f) where
-  wrapWeaver (Weaver w) = Weaver $ Tannen . fmap w . runTannen
-  {-# INLINE wrapWeaver #-}
+-- | Pointed Functors (= functors equipped with 'pure') over binary
+-- effects. Doesn't have an equivalent afaik in @profunctors@.
+class (EffFunctor f) => EffPointedFunctor f where
+  effpure :: eff :-> f eff
 
-wrapRopeRec :: (WrapperEff f)
-            => Rec (Weaver interp) strands
-            -> Rec (Weaver (f interp)) (MapStrandEffs f strands)
-wrapRopeRec RNil = RNil
-wrapRopeRec (w :& rest) = wrapWeaver w :& wrapRopeRec rest
+instance (Functor f) => EffFunctor (Tannen f) where
+  effmap f = Tannen . fmap f . runTannen
+  {-# INLINE effmap #-}
+
+instance (Applicative f) => EffPointedFunctor (Tannen f) where
+  effpure = Tannen . pure
+  {-# INLINE effpure #-}
+
+effmapRopeRec :: (EffFunctor f)
+              => Rec (Weaver interp) strands
+              -> Rec (Weaver (f interp)) (MapStrandEffs f strands)
+effmapRopeRec RNil = RNil
+effmapRopeRec (Weaver w :& rest) = Weaver (effmap w) :& effmapRopeRec rest
 
 -- | When all the strands of a 'Rope' have the same type of ahead of time
 -- effects, we can run them. See 'splitRope' to isolate some strands in a 'Rope'
-unwrapRopeRunner :: (WrapperEff f)
-                 => RopeRunner Rec (MapStrandEffs f strands) (f core) core a b
-                 -> RopeRunner Rec strands core core a b
-unwrapRopeRunner (RopeRunner f) = RopeRunner $ f . wrapRopeRec
+unwrapRopeRunner :: (EffFunctor f)
+                 => RopeRunner Rec (MapStrandEffs f strands) (f core) core
+                :-> RopeRunner Rec strands core core
+unwrapRopeRunner (RopeRunner f) = RopeRunner $ f . effmapRopeRec
 {-# INLINE unwrapRopeRunner #-}
 
-unwrapSomeStrands :: (WrapperEff f, RMap (MapStrandEffs f mantle1))
+unwrapSomeStrands :: (EffFunctor f, RMap (MapStrandEffs f mantle1))
                   => (f core' :-> interp)
+                     -- ^ How to run the extracted EffFunctor layer
                   -> (RopeRunner Rec mantle2 interp core :-> core')
+                     -- ^ What to do with the remaining strands (those not
+                     -- wrapped)
                   -> RopeRunner Rec (MapStrandEffs f mantle1 ++ mantle2) interp core
+                     -- ^ The 'RopeRunner' to transform, where first strands all
+                     -- are wrapped in the @f@ EffFunctor
                  :-> RopeRunner Rec mantle1                              core'  core'
+                     -- ^ The resulting 'RopeRunner', where 
 unwrapSomeStrands f g = unwrapRopeRunner . dimapRopeRunner f g . splitRopeRunner
+{-# INLINE unwrapSomeStrands #-}
