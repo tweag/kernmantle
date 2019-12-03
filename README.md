@@ -15,6 +15,11 @@ This chain of interlaced effects is the `Rope`. Each effect is lifted in the
 `Rope` with the `strand` function. Effects can be added thanks to the `entwine`
 function.
 
+## To build
+
+Recommended way is to use nix. Run `nix-shell` and in the shell just run `cabal
+new-build`. Stack config might not be up to date.
+
 
 ## Why yet another effects library??
 

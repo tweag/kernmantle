@@ -9,7 +9,7 @@
 
 -- | In this example, we show how to condition some strand based on
 -- ahead-of-time effects (here CLI parsing) which just need to instanciate
--- Functor
+-- Applicative
 
 import Control.Kernmantle.Error
 import Control.Kernmantle.Rope

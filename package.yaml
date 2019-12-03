@@ -40,4 +40,3 @@ executables:
     main: examples/ExCli.hs
     dependencies:
       - kernmantle
-      - optparse-applicative
