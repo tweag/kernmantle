@@ -217,11 +217,12 @@ toSieve_ :: ueff x -> ToSieve ueff () x
 toSieve_ = Kleisli . const
 {-# INLINE toSieve_ #-}
 
-entwineEffFunctors :: (EffFunctor f, RMap (MapStrandEffs f mantle1))
-                   => (f core' :-> core)  -- ^ Run the effects
-                   -> (LooseRope mantle2 core :-> core')  -- ^ Run the 
-                   -> LooseRope (MapStrandEffs f mantle1 ++ mantle2) core
-                  :-> LooseRope mantle1 core'
+entwineEffFunctors
+  :: (EffFunctor f, RMap (MapStrandEffs f mantle1))
+  => (f core' :-> core)
+  -> (LooseRope mantle2 core :-> core')
+  -> LooseRope (MapStrandEffs f mantle1 ++ mantle2) core
+ :-> LooseRope mantle1 core'
 entwineEffFunctors f g (Rope rnr) = Rope $ unwrapSomeStrands f (g . Rope) rnr
 {-# INLINE entwineEffFunctors #-}
 
@@ -235,8 +236,8 @@ withDecomposedEffects
   -> LooseRope (MapStrandEffs f mantle1 ++ mantle2) core
      -- ^ The rope to split
  :-> LooseRope rest core
-withDecomposedEffects runWrapper runMantle1 runMantle2 (Rope rnr) = runMantle1 $ Rope $
-  unwrapSomeStrands runWrapper (untwine . runMantle2 . Rope) rnr
+withDecomposedEffects runWrapper runMantle1 runMantle2 =
+  runMantle1 . entwineEffFunctors runWrapper (untwine . runMantle2)
 {-# INLINE withDecomposedEffects #-}
 
 -- | Separates a 'LooseRope' in two parts: one with AoT effects (@mantle1@) and
