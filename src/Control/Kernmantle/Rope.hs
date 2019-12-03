@@ -245,6 +245,13 @@ splitRopeRunner :: RopeRunner Rec (mantle1 ++ mantle2) interp core a b
 splitRopeRunner (RopeRunner f) = RopeRunner $ \r1 -> RopeRunner $ \r2 ->
   f $ r1 `rappend` r2
 
+joinRopeRunner :: (RetwinableAs r mantle1 interp mantle
+                  ,RetwinableAs r mantle2 interp mantle)
+               => RopeRunner r mantle1 interp (RopeRunner r mantle2 interp core) a b
+               -> RopeRunner r mantle interp core a b
+joinRopeRunner (RopeRunner f) = RopeRunner $ \r -> case f (rcast r) of
+  RopeRunner f' -> f' (rcast r)
+
 -- -- API-wise, it'd be better if splitRope could be reformulated as the
 -- -- following, but that seems harder to implement:
 -- groupStrands :: LooseRope (mantle1 ++ mantle2) core a b
@@ -321,3 +328,8 @@ unwrapSomeStrands :: (EffFunctor f, RMap (MapStrandEffs f mantle1))
                      -- ^ The resulting 'RopeRunner', where 
 unwrapSomeStrands f g = unwrapRopeRunner . effdimap f g . splitRopeRunner
 {-# INLINE unwrapSomeStrands #-}
+
+-- entwineEffFunctors :: (EffFunctor f, RMap (MapStrandEffs f mantle1))
+--                    => RopeRunner Rec (MapStrandEffs f mantle1 ++ mantle2) interp core
+--                   :-> RopeRunner Rec mantle1                              core'  core'
+-- entwineEffFunctors = unwrapSomeStrands id id
