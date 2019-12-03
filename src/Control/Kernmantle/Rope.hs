@@ -4,6 +4,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE FlexibleInstances #-}
@@ -13,6 +14,8 @@
 {-# LANGUAGE OverloadedLabels #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 -- | A 'Rope' connects together various effect 'Strand's that get interlaced
 -- together.
@@ -39,6 +42,7 @@ module Control.Kernmantle.Rope
   , Entwines, SatisfiesAll
   , Label, fromLabel
   , ToSieve
+  , WithAoT
   , type (:->)
   , (&)
 
@@ -50,6 +54,11 @@ module Control.Kernmantle.Rope
   , mergeStrands
   , asCore
   , toSieve, toSieve_
+
+  , withAoT
+  , withDecomposedAoTs
+  , withDecomposedEffects
+  , entwineEffFunctors
   )
 where
 
@@ -67,6 +76,7 @@ import Data.Functor.Identity
 import Data.Typeable
 import Data.Vinyl hiding ((<+>))
 import Data.Vinyl.ARec
+import Data.Vinyl.Functor
 import Data.Vinyl.TypeLevel
 import GHC.Exts
 import GHC.TypeLits
@@ -75,6 +85,7 @@ import GHC.OverloadedLabels
 import Prelude hiding (id, (.))
 
 import Control.Kernmantle.Error
+import Control.Kernmantle.Functors
 
 
 -- | The kind for all binary effects. First param is usually an input
@@ -98,29 +109,55 @@ type family StrandEff t where
 -- most often be @Weaver someCore@
 type RopeRec = (Strand -> *) -> [Strand] -> *
 
--- | Runs one "mantle" strand (* -> * -> * effect) in a "core" strand. Is
--- parameterized over a Strand even if it ignores its name internally
--- because that's what is expect by the 'RopeRec'
-newtype Weaver (core::BinEff) (strand::Strand) = Weaver
-  { weaveStrand :: StrandEff strand :-> core }
+-- | Runs one @strand@ (* -> * -> * effect) in a @interp@ effect. Is
+-- parameterized over a Strand (and not just a BinEffect) even if it ignores its
+-- name internally because that's what is expect by the 'RopeRec'
+newtype Weaver (interp::BinEff) (strand::Strand) = Weaver
+  { weaveStrand :: StrandEff strand :-> interp }
 
--- | 'Rope' is a free arrow built out of _several_ binary effects
--- (ie. effects with kind * -> * -> *). These effects are called 'Strand's, they
--- compose the @mantle@, and they can be interlaced "on top" of an existing
--- @core@ effect.
-newtype Rope (record::RopeRec) (mantle::[Strand]) (core::BinEff) a b =
-  Rope
-    { runRope :: record (Weaver core) mantle -> core a b }
+mapWeaverInterp :: (interp :-> interp')
+                -> Weaver interp strand
+                -> Weaver interp' strand
+mapWeaverInterp f (Weaver w) = Weaver $ f . w
+{-# INLINE mapWeaverInterp #-}
+
+newtype RopeRunner (record::RopeRec) (mantle::[Strand]) (interp::BinEff) (core::BinEff) a b =
+  RopeRunner (record (Weaver interp) mantle -> core a b)
   
   deriving ( Category, Bifunctor
            , Arrow, ArrowChoice, ArrowLoop, ArrowZero, ArrowPlus
            , Closed, Costrong, Cochoice
            , ThrowEffect ex, TryEffect ex
            )
-    via Reader (record (Weaver core) mantle) `Tannen` core
+    via Reader (record (Weaver interp) mantle) `Tannen` core
 
   deriving (Profunctor, Strong, Choice)
-    via Reader (record (Weaver core) mantle) `Cayley` core
+    via Reader (record (Weaver interp) mantle) `Cayley` core
+
+instance (RMap m) => EffProfunctor (RopeRunner Rec m) where
+  effdimap f g (RopeRunner run) = RopeRunner $
+    g . run . rmap (mapWeaverInterp f)
+  {-# INLINE effdimap #-}
+
+-- | 'Rope' is a free arrow built out of _several_ binary effects (ie. effects
+-- with kind * -> * -> *). These effects are called 'Strand's, they compose the
+-- @mantle@, can be interpreted in an @interp@ effect and can be interlaced "on
+-- top" of an existing @core@ effect.
+newtype Rope record mantle core a b = Rope { getRopeRunner :: RopeRunner record mantle core core a b }
+  deriving ( Category, Bifunctor
+           , Arrow, ArrowChoice, ArrowLoop, ArrowZero, ArrowPlus
+           , Closed, Costrong, Cochoice
+           , ThrowEffect ex, TryEffect ex
+           , Profunctor, Strong, Choice
+           )
+
+runRope :: Rope record mantle core a b -> record (Weaver core) mantle -> core a b
+runRope (Rope (RopeRunner f)) = f
+{-# INLINE runRope #-}
+
+mkRope :: (record (Weaver core) mantle -> core a b) -> Rope record mantle core a b
+mkRope = Rope . RopeRunner
+{-# INLINE mkRope #-}
 
 -- | A 'Rope' that is "tight", meaning you cannot 'entwine' new 'Strand's to
 -- it. The 'strand' function is @O(1)@ on 'TightRope's whatever the number of
@@ -135,12 +172,12 @@ type LooseRope = Rope Rec
 class InRope l eff rope where
   -- | Lifts a binary effect in the 'Rope'. Performance should be better with a
   -- 'TightRope' than with a 'LooseRope', unless you have very few 'Strand's.
-  strand :: Label l -> eff a b -> rope a b
+  strand :: Label l -> eff :-> rope
 
 instance ( HasField record l mantle mantle eff eff
          , RecElemFCtx record (Weaver core) )
   => InRope l eff (Rope record mantle core) where
-  strand l eff = Rope $ \r -> weaveStrand (rgetf l r) eff
+  strand l eff = mkRope $ \r -> weaveStrand (rgetf l r) eff
   {-# INLINE strand #-}
 
 -- | Tells whether a collection of @strands@ is in a 'Rope'
@@ -161,33 +198,37 @@ type AnyRopeWith strands coreConstraints a b = forall s r c.
 
 -- | Turn a 'LooseRope' into a 'TightRope'
 tighten :: (RecApplicative m, RPureConstrained (IndexableField m) m)
-        => LooseRope m core a b -> TightRope m core a b
-tighten (Rope f) = Rope $ f . fromARec
+        => LooseRope m core :-> TightRope m core
+tighten r = mkRope $ runRope r . fromARec
 {-# INLINE tighten #-}
 
 -- | Turn a 'TightRope' into a 'LooseRope'
 loosen :: (NatToInt (RLength m))
-       => TightRope m core a b -> LooseRope m core a b
-loosen (Rope f) = Rope $ f . toARec
+       => TightRope m core :-> LooseRope m core
+loosen r = mkRope $ runRope r . toARec
 {-# INLINE loosen #-}
 
 -- | Adds a new effect strand in the 'Rope'. Users of that function should
 -- normally not place constraints on the core or instanciate it. Rather,
 -- requirement of the execution function should be expressed in terms of other
 -- effects of the @mantle@.
+--
+-- @(a :-> b)@ is the type function from an effect @a@ to an effect @b@
+-- preserving the input/output type params of these effects. It allows us to
+-- elude the two type parameters of these effects, but these are still here.
 entwine :: Label name  -- ^ Give a name to the strand
         -> (binEff :-> LooseRope mantle core) -- ^ The execution function
-        -> LooseRope ('(name,binEff) ': mantle) core a b -- ^ The 'Rope' with an extra effect strand
-        -> LooseRope mantle core a b -- ^ The 'Rope' with the extra effect strand
+        -> LooseRope ('(name,binEff) ': mantle) core -- ^ The 'Rope' with an extra effect strand
+       :-> LooseRope mantle core -- ^ The 'Rope' with the extra effect strand
                                      -- woven in the core
-entwine _ run (Rope f) = Rope $ \r ->
-  f (Weaver (\eff -> runRope (run eff) r) :& r)
+entwine _ run rope = mkRope $ \r ->
+  runRope rope (Weaver (\eff -> runRope (run eff) r) :& r)
 {-# INLINE entwine #-}
 
 -- | Runs an effect directly in the core. You should use that function only as
 -- part of a call to 'entwine'.
-asCore :: core x y -> Rope r mantle core x y
-asCore = Rope . const
+asCore :: core :-> Rope r mantle core
+asCore = mkRope . const
 {-# INLINE asCore #-}
 
 -- | Indicates that @strands@ can be reordered and considered a subset of
@@ -200,33 +241,42 @@ type RetwinableAs record strands core strands' =
 -- more elements than @strands@. Note it works on both 'TightRope's and
 -- 'LooseRope's
 retwine :: (RetwinableAs r strands core strands')
-        => Rope r strands core a b
-        -> Rope r strands' core a b
-retwine (Rope f) = Rope $ f . rcast
+        => Rope r strands core
+       :-> Rope r strands' core
+retwine r = mkRope $ runRope r . rcast
 {-# INLINE retwine #-}
 
--- | Splits a 'Rope' in two parts, so we can select several strands to act on
-splitRope :: (RMap mantle1)
-          => LooseRope (mantle1 ++ mantle2) core a b
-          -> LooseRope mantle1 (LooseRope mantle2 core) a b
-splitRope (Rope f) = Rope $ \r1 -> Rope $ \r2 ->
-  f $ rmap (runWith r2) r1 `rappend` r2
-  where
-    runWith r (Weaver toInnerRope) = Weaver $ \strand ->
-        runRope (toInnerRope strand) r
+-- | Splits a 'RopeRunner' in two parts, so we can select several strands to act on
+splitRopeRunner :: RopeRunner Rec (mantle1 ++ mantle2) interp core
+               :-> RopeRunner Rec mantle1 interp (RopeRunner Rec mantle2 interp core)
+splitRopeRunner (RopeRunner f) = RopeRunner $ \r1 -> RopeRunner $ \r2 ->
+  f $ r1 `rappend` r2
+
+joinRopeRunner :: (RetwinableAs r mantle1 interp mantle
+                  ,RetwinableAs r mantle2 interp mantle)
+               => RopeRunner r mantle1 interp (RopeRunner r mantle2 interp core)
+              :-> RopeRunner r mantle interp core
+joinRopeRunner (RopeRunner f) = RopeRunner $ \r -> case f (rcast r) of
+  RopeRunner f' -> f' (rcast r)
+
+-- -- API-wise, it'd be better if splitRope could be reformulated as the
+-- -- following, but that seems harder to implement:
+-- groupStrands :: LooseRope (mantle1 ++ mantle2) core a b
+--              -> LooseRope ('(name,LooseRope mantle1 core) ': mantle2) core a b
+-- groupStrands (Rope f) = Rope $ \(Weaver subrope :& r) ->  
 
 -- | Merge two strands that have the same effect type. Keeps the first name.
 mergeStrands :: Label n1
              -> Label n2
-             -> LooseRope ( '(n1,binEff) ': '(n2,binEff) ': mantle ) core a b
-             -> LooseRope ( '(n1,binEff) ': mantle ) core a b
-mergeStrands _ _ (Rope f) = Rope $ \(r@(Weaver w) :& rest) ->
-  f (r :& Weaver w :& rest)
+             -> LooseRope ( '(n1,binEff) ': '(n2,binEff) ': mantle ) core
+            :-> LooseRope ( '(n1,binEff) ': mantle ) core
+mergeStrands _ _ rope = mkRope $ \(r@(Weaver w) :& rest) ->
+  runRope rope (r :& Weaver w :& rest)
 {-# INLINE mergeStrands #-}
 
 -- | Strips a 'Rope' of its empty mantel.
-untwine :: LooseRope '[] core a b -> core a b
-untwine (Rope f) = f RNil
+untwine :: LooseRope '[] core :-> core
+untwine r = runRope r RNil
 {-# INLINE untwine #-}
 
 
@@ -253,15 +303,74 @@ toSieve_ :: ueff x -> ToSieve ueff () x
 toSieve_ = Kleisli . const
 {-# INLINE toSieve_ #-}
 
--- | Adds some ahead-of-time (functorial) unary effects to any binary effect,
--- that should be executed /before/ we get to the binary effect. These
--- ahead-of-time effects can be CLI parsing, access to some configuration,
--- pre-processing of the compute graph, etc.
-type WithAoTEff a f = Tannen f a
+-- | Wrap each strand effect inside a type constructor
+type family MapStrandEffs f mantle where
+  MapStrandEffs f '[] = '[]
+  MapStrandEffs f ( s ': strands ) = '(StrandName s, f (StrandEff s)) ': MapStrandEffs f strands
 
--- | When you have a functorial effect returning a, register it as ahead-of-time
--- effect to be executed /before/ eff can be executed. Ahead-of-time effects can
--- be merged together if @f@ is 'Applicative'
-withAoTEff :: f (eff x y) -> (eff `WithAoTEff` f) x y
-withAoTEff = Tannen
-{-# INLINE withAoTEff #-}
+effmapRopeRec :: (EffFunctor f)
+              => Rec (Weaver interp) strands
+              -> Rec (Weaver (f interp)) (MapStrandEffs f strands)
+effmapRopeRec RNil = RNil
+effmapRopeRec (Weaver w :& rest) = Weaver (effmap w) :& effmapRopeRec rest
+
+-- | When all the strands of a 'Rope' have the same type of ahead of time
+-- effects, we can run them. See 'splitRope' to isolate some strands in a 'Rope'
+unwrapRopeRunner :: (EffFunctor f)
+                 => RopeRunner Rec (MapStrandEffs f strands) (f core) core
+                :-> RopeRunner Rec strands core core
+unwrapRopeRunner (RopeRunner f) = RopeRunner $ f . effmapRopeRec
+{-# INLINE unwrapRopeRunner #-}
+
+unwrapSomeStrands :: (EffFunctor f, RMap (MapStrandEffs f mantle1))
+                  => (f core' :-> interp)
+                     -- ^ How to run the extracted EffFunctor layer
+                  -> (RopeRunner Rec mantle2 interp core :-> core')
+                     -- ^ What to do with the remaining strands (those not
+                     -- wrapped)
+                  -> RopeRunner Rec (MapStrandEffs f mantle1 ++ mantle2) interp core
+                     -- ^ The 'RopeRunner' to transform, where first strands all
+                     -- are wrapped in the @f@ EffFunctor
+                 :-> RopeRunner Rec mantle1                              core'  core'
+                     -- ^ The resulting 'RopeRunner', where 
+unwrapSomeStrands f g = unwrapRopeRunner . effdimap f g . splitRopeRunner
+{-# INLINE unwrapSomeStrands #-}
+
+entwineEffFunctors :: (EffFunctor f, RMap (MapStrandEffs f mantle1))
+                   => (f core' :-> core)  -- ^ Run the effects
+                   -> (LooseRope mantle2 core :-> core')  -- ^ Run the 
+                   -> LooseRope (MapStrandEffs f mantle1 ++ mantle2) core
+                  :-> LooseRope mantle1 core'
+entwineEffFunctors f g (Rope rnr) = Rope $ unwrapSomeStrands f (g . Rope) rnr
+{-# INLINE entwineEffFunctors #-}
+
+-- | Separates a 'LooseRope' in two parts: one with effects wrappers (@mantle1@) and
+-- one without (@mantle2) and runs them
+withDecomposedEffects
+  :: (EffPointedFunctor f, RMap (MapStrandEffs f mantle1))
+  => (f core :-> core)  -- ^ Run the wrapper effects (in the core)
+  -> (LooseRope mantle1 core :-> LooseRope rest core)
+     -- ^ Run the effects that were wrapped with the wrapper
+  -> (LooseRope mantle2 core :-> LooseRope '[] core)
+     -- ^ Run the effects that were not wrapped
+  -> LooseRope (MapStrandEffs f mantle1 ++ mantle2) core
+     -- ^ The rope to split
+ :-> LooseRope rest core
+withDecomposedEffects runWrapper runMantle1 runMantle2 (Rope rnr) = runMantle1 $ Rope $
+  unwrapSomeStrands runWrapper (untwine . runMantle2 . Rope) rnr
+{-# INLINE withDecomposedEffects #-}
+
+-- | Separates a 'LooseRope' in two parts: one with AoT effects (@mantle1@) and
+-- one without (@mantle2) and runs them
+withDecomposedAoTs
+  :: (Applicative f, RMap (MapStrandEffs (Tannen f) mantle1))
+  => (forall x y. f (core x y) -> core x y)  -- ^ Run the wrapper effects (in the core)
+  -> (LooseRope mantle1 core :-> LooseRope rest core)
+     -- ^ Run the effects that were wrapped with the wrapper
+  -> (LooseRope mantle2 core :-> LooseRope '[] core)
+     -- ^ Run the effects that were not wrapped
+  -> LooseRope (MapStrandEffs (Tannen f) mantle1 ++ mantle2) core
+     -- ^ The rope to split
+ :-> LooseRope rest core
+withDecomposedAoTs runAoT = withDecomposedEffects (runAoT . runTannen)
+{-# INLINE withDecomposedAoTs #-}

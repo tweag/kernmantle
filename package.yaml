@@ -33,7 +33,11 @@ library:
 
 executables:
   ex1:
-    source-dirs: examples
-    main: Ex1.hs
+    main: examples/Ex1.hs
     dependencies:
       - kernmantle
+  exCli:
+    main: examples/ExCli.hs
+    dependencies:
+      - kernmantle
+      - optparse-applicative
