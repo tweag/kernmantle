@@ -36,8 +36,8 @@ module Control.Kernmantle.Rope
   , AnyRopeWith
   , Entwines, SatisfiesAll
   , Label, fromLabel
-  , ToSieve
-  , WithAoT
+  , Sieve(..), ToSieve
+  , WrappingEff
   , type (:->)
   , (&)
 
@@ -50,9 +50,8 @@ module Control.Kernmantle.Rope
   , asCore
   , toSieve, toSieve_
 
-  , withAoT
-  , withDecomposedAoTs
-  , withDecomposedEffects
+  , withEffWrapper, getEffWrapper
+  , onEachEffFunctor
   , entwineEffFunctors
   )
 where
@@ -226,9 +225,20 @@ entwineEffFunctors
 entwineEffFunctors f g (Rope rnr) = Rope $ unwrapSomeStrands f (g . Rope) rnr
 {-# INLINE entwineEffFunctors #-}
 
-withDecomposedEffects
+-- | Separates a 'LooseRope' in two parts: one wrapped in EffFunctors
+-- (@mantle1@) and one which is not (@mantle2) and runs them. This is a
+-- convenience function to run several strands wrapped with the same
+-- 'EffFunctor'.
+--
+-- Note that the function to run the effect wrappers is executed _once per
+-- wrapper_ used along the 'Rope', so keep that function light.
+--
+-- Note: The UX for 'onEachEffFunctor' is not great. Though it is quite
+-- simple, it forces either to run everything at once, or to do some trickery by
+-- returning some effecting in the core. We should try to improve that.
+onEachEffFunctor
   :: (EffFunctor f, RMap (MapStrandEffs f mantle1))
-  => (f core :-> core)  -- ^ Run the wrapper effects (in the core)
+  => (f core :-> core)  -- ^ Run the wrapper effects
   -> (LooseRope mantle1 core :-> LooseRope rest core)
      -- ^ Run the effects that were wrapped with the wrapper
   -> (LooseRope mantle2 core :-> LooseRope '[] core)
@@ -236,25 +246,6 @@ withDecomposedEffects
   -> LooseRope (MapStrandEffs f mantle1 ++ mantle2) core
      -- ^ The rope to split
  :-> LooseRope rest core
-withDecomposedEffects runWrapper runMantle1 runMantle2 =
+onEachEffFunctor runWrapper runMantle1 runMantle2 =
   runMantle1 . entwineEffFunctors runWrapper (untwine . runMantle2)
-{-# INLINE withDecomposedEffects #-}
-
--- | Separates a 'LooseRope' in two parts: one with AoT effects (@mantle1@) and
--- one without (@mantle2) and runs them
---
--- Note: The UX for 'withDecomposedEffects' is not great. Though it is quite
--- simple, it forces either to run everything at once, or to do some trickery by
--- returning some effecting in the core. We should try to improve that.
-withDecomposedAoTs
-  :: (Functor f, RMap (MapStrandEffs (Tannen f) mantle1))
-  => (forall x y. f (core x y) -> core x y)  -- ^ Run the wrapper effects (in the core)
-  -> (LooseRope mantle1 core :-> LooseRope rest core)
-     -- ^ Run the effects that were wrapped with the wrapper
-  -> (LooseRope mantle2 core :-> LooseRope '[] core)
-     -- ^ Run the effects that were not wrapped
-  -> LooseRope (MapStrandEffs (Tannen f) mantle1 ++ mantle2) core
-     -- ^ The rope to split
- :-> LooseRope rest core
-withDecomposedAoTs runAoT = withDecomposedEffects (runAoT . runTannen)
-{-# INLINE withDecomposedAoTs #-}
+{-# INLINE onEachEffFunctor #-}

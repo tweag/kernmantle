@@ -1,5 +1,6 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TypeSynonymInstances #-}
 
 -- | This module provides Functors/Profunctors over binary effects
 
@@ -29,15 +30,20 @@ class EffProfunctor p where
 -- that should be executed /before/ we get to the binary effect. These
 -- ahead-of-time effects can be CLI parsing, access to some configuration,
 -- pre-processing of the compute graph, etc.
-type WithAoT a f = Tannen f a
+type WrappingEff = Tannen
 
-withAoT :: f (eff x y) -> (eff `WithAoT` f) x y
-withAoT = Tannen
+-- | Adds the 'WrappingEff' layer
+withEffWrapper :: f (eff x y) -> (f `WrappingEff` eff) x y
+withEffWrapper = Tannen
 
-instance (Functor f) => EffFunctor (Tannen f) where
-  effmap f = Tannen . fmap f . runTannen
+-- | Removes the 'WrappingEff' layer
+getEffWrapper :: (f `WrappingEff` eff) x y -> f (eff x y)
+getEffWrapper = runTannen
+
+instance (Functor f) => EffFunctor (WrappingEff f) where
+  effmap f = withEffWrapper . fmap f . getEffWrapper
   {-# INLINE effmap #-}
 
-instance (Applicative f) => EffPointedFunctor (Tannen f) where
-  effpure = Tannen . pure
+instance (Applicative f) => EffPointedFunctor (WrappingEff f) where
+  effpure = withEffWrapper . pure
   {-# INLINE effpure #-}

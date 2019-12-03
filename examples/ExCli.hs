@@ -56,7 +56,7 @@ type VerbControl = (->) VerbLevel
 -- the verbosity
 type a ~~> b =
   AnyRopeWith '[ '("console", Console)
-               , '("logger", Logger `WithAoT` VerbControl)
+               , '("logger", VerbControl `WrappingEff` Logger)
                , '("file", File) ]
               '[ArrowChoice, TryEffect IOException]
               a b
@@ -66,9 +66,9 @@ data VerbLevel = Silent | Error | Warning | Info
 
 -- | Controls the verbosity level before logging in a 'Console' effect
 logS :: VerbLevel   -- ^ Minimal verbosity
-     -> AnyRopeWith '[ '("logger", Logger `WithAoT` VerbControl) ] '[]
+     -> AnyRopeWith '[ '("logger", VerbControl `WrappingEff` Logger) ] '[]
                     String ()
-logS minVerb = strand #logger $ withAoT $ \level ->
+logS minVerb = strand #logger $ withEffWrapper $ \level ->
   if level >= minVerb then Log else NoLog
 
 getContentsToOutput :: FilePath ~~> String
@@ -96,22 +96,23 @@ prog = proc name -> do
 getVerbLevel :: IO VerbLevel
 getVerbLevel = do
   [vl] <- getArgs
-  return $ read vl
+  return $! read vl
 
 -- | main details every strand, but we can skip the #io strand and the merging
 -- strand an directly interpret every strand in the core effect
 main :: IO ()
 main = do
   vl <- getVerbLevel
-  putStrLn $ "Using verbosity level: " ++ show vl
   prog & loosen
-       & withDecomposedAoTs
-         (\f -> f vl) -- First we run the AoT effect, which is a pure function,
-                      -- by giving it the verbosity level read from CLI
+       & onEachEffFunctor
+         (\f -> getEffWrapper f vl)
+             -- First, how to run the config effect, which is a pure function,
+             -- by giving it the verbosity level read from CLI
          ( entwine #logger (asCore . toSieve . runLogger) )
-             -- Then we run all the effects that were wrapped in these AoT
-             -- effects
+             -- Then, how to run the effects that were wrapped in these effect
+             -- wrappers
          ( entwine #console (asCore . toSieve . runConsole)
          . entwine #file (asCore . toSieve . runFile) )
-             -- ...then all the other effects (those that were _not_ wrapped)
+             -- And finally, how to run all the other effects that were _not_
+             -- wrapped
        & runSieveCore "You"
