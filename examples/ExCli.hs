@@ -104,11 +104,16 @@ getVerbLevel = do
 main :: IO ()
 main = do
   vl <- getVerbLevel
-  print vl
+  putStrLn $ "Using verbosity level: " ++ show vl
   prog & loosen
        & withDecomposedAoTs
-         (\(WithVerbCtrl f) -> f vl)
+         (\(WithVerbCtrl f) -> f vl) -- First we run the AoT effects, by giving
+                                     -- them the verbosity level read from CLI
          ( entwine #logger (asCore . toSieve . runLogger) )
+                                     -- Then we run all the effects that were
+                                     -- wrapped in these AoT effects
          ( entwine #console (asCore . toSieve . runConsole)
          . entwine #file (asCore . toSieve . runFile) )
+                                     -- ...then all the other effects (those
+                                     -- that were _not_ wrapped)
        & runSieveCore "You"
