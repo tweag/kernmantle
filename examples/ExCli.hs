@@ -5,7 +5,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE DeriveFunctor #-}
 
 -- | In this example, we show how to condition some strand based on
 -- ahead-of-time effects (here CLI parsing) which just need to instanciate
@@ -49,6 +48,10 @@ runFile cmd inp = case cmd of
   GetFile -> readFile inp
   PutFile -> uncurry writeFile inp
 
+-- | An AoT effect to deactivate some effects depending on some verbosity
+-- level. This is a Functor.
+type VerbControl = (->) VerbLevel
+
 -- | Here we added an AoT effect on top of the console effect that will control
 -- the verbosity
 type a ~~> b =
@@ -61,15 +64,11 @@ type a ~~> b =
 data VerbLevel = Silent | Error | Warning | Info
   deriving (Eq, Ord, Bounded, Show, Read)
 
--- | An AoT effect to deactivate some effects depending on some verbosity level
-newtype VerbControl a = WithVerbCtrl (VerbLevel -> a)
-  deriving (Functor)
-
 -- | Controls the verbosity level before logging in a 'Console' effect
 logS :: VerbLevel   -- ^ Minimal verbosity
      -> AnyRopeWith '[ '("logger", Logger `WithAoT` VerbControl) ] '[]
                     String ()
-logS minVerb = strand #logger $ withAoT $ WithVerbCtrl $ \level ->
+logS minVerb = strand #logger $ withAoT $ \level ->
   if level >= minVerb then Log else NoLog
 
 getContentsToOutput :: FilePath ~~> String
@@ -107,13 +106,12 @@ main = do
   putStrLn $ "Using verbosity level: " ++ show vl
   prog & loosen
        & withDecomposedAoTs
-         (\(WithVerbCtrl f) -> f vl) -- First we run the AoT effects, by giving
-                                     -- them the verbosity level read from CLI
+         (\f -> f vl) -- First we run the AoT effect, which is a pure function,
+                      -- by giving it the verbosity level read from CLI
          ( entwine #logger (asCore . toSieve . runLogger) )
-                                     -- Then we run all the effects that were
-                                     -- wrapped in these AoT effects
+             -- Then we run all the effects that were wrapped in these AoT
+             -- effects
          ( entwine #console (asCore . toSieve . runConsole)
          . entwine #file (asCore . toSieve . runFile) )
-                                     -- ...then all the other effects (those
-                                     -- that were _not_ wrapped)
+             -- ...then all the other effects (those that were _not_ wrapped)
        & runSieveCore "You"
