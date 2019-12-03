@@ -56,6 +56,9 @@ module Control.Kernmantle.Rope
   , toSieve, toSieve_
 
   , withAoT
+  , withDecomposedAoTs
+  , withDecomposedEffects
+  , entwineEffFunctors
   )
 where
 
@@ -140,7 +143,7 @@ instance (RMap m) => EffProfunctor (RopeRunner Rec m) where
 -- with kind * -> * -> *). These effects are called 'Strand's, they compose the
 -- @mantle@, can be interpreted in an @interp@ effect and can be interlaced "on
 -- top" of an existing @core@ effect.
-newtype Rope record mantle core a b = Rope (RopeRunner record mantle core core a b)
+newtype Rope record mantle core a b = Rope { getRopeRunner :: RopeRunner record mantle core core a b }
   deriving ( Category, Bifunctor
            , Arrow, ArrowChoice, ArrowLoop, ArrowZero, ArrowPlus
            , Closed, Costrong, Cochoice
@@ -333,7 +336,41 @@ unwrapSomeStrands :: (EffFunctor f, RMap (MapStrandEffs f mantle1))
 unwrapSomeStrands f g = unwrapRopeRunner . effdimap f g . splitRopeRunner
 {-# INLINE unwrapSomeStrands #-}
 
--- entwineEffFunctors :: (EffFunctor f, RMap (MapStrandEffs f mantle1))
---                    => RopeRunner Rec (MapStrandEffs f mantle1 ++ mantle2) interp core
---                   :-> RopeRunner Rec mantle1                              core'  core'
--- entwineEffFunctors = unwrapSomeStrands id id
+entwineEffFunctors :: (EffFunctor f, RMap (MapStrandEffs f mantle1))
+                   => (f core' :-> core)  -- ^ Run the effects
+                   -> (LooseRope mantle2 core :-> core')  -- ^ Run the 
+                   -> LooseRope (MapStrandEffs f mantle1 ++ mantle2) core
+                  :-> LooseRope mantle1 core'
+entwineEffFunctors f g (Rope rnr) = Rope $ unwrapSomeStrands f (g . Rope) rnr
+{-# INLINE entwineEffFunctors #-}
+
+-- | Separates a 'LooseRope' in two parts: one with effects wrappers (@mantle1@) and
+-- one without (@mantle2) and runs them
+withDecomposedEffects
+  :: (EffPointedFunctor f, RMap (MapStrandEffs f mantle1))
+  => (f core :-> core)  -- ^ Run the wrapper effects (in the core)
+  -> (LooseRope mantle1 core :-> LooseRope rest core)
+     -- ^ Run the effects that were wrapped with the wrapper
+  -> (LooseRope mantle2 core :-> LooseRope '[] core)
+     -- ^ Run the effects that were not wrapped
+  -> LooseRope (MapStrandEffs f mantle1 ++ mantle2) core
+     -- ^ The rope to split
+ :-> LooseRope rest core
+withDecomposedEffects runWrapper runMantle1 runMantle2 (Rope rnr) = runMantle1 $ Rope $
+  unwrapSomeStrands runWrapper (untwine . runMantle2 . Rope) rnr
+{-# INLINE withDecomposedEffects #-}
+
+-- | Separates a 'LooseRope' in two parts: one with AoT effects (@mantle1@) and
+-- one without (@mantle2) and runs them
+withDecomposedAoTs
+  :: (Applicative f, RMap (MapStrandEffs (Tannen f) mantle1))
+  => (forall x y. f (core x y) -> core x y)  -- ^ Run the wrapper effects (in the core)
+  -> (LooseRope mantle1 core :-> LooseRope rest core)
+     -- ^ Run the effects that were wrapped with the wrapper
+  -> (LooseRope mantle2 core :-> LooseRope '[] core)
+     -- ^ Run the effects that were not wrapped
+  -> LooseRope (MapStrandEffs (Tannen f) mantle1 ++ mantle2) core
+     -- ^ The rope to split
+ :-> LooseRope rest core
+withDecomposedAoTs runAoT = withDecomposedEffects (runAoT . runTannen)
+{-# INLINE withDecomposedAoTs #-}

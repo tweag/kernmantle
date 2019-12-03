@@ -5,7 +5,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DerivingVia #-}
 
 -- | In this example, we show how to condition some strand based on
 -- ahead-of-time effects (here CLI parsing) which just need to instanciate
@@ -14,6 +14,7 @@
 import Control.Kernmantle.Error
 import Control.Kernmantle.Rope
 import Control.Arrow
+import Data.Functor.Compose
 import System.Environment (getArgs)
 
 
@@ -28,12 +29,14 @@ runConsole cmd inp = case cmd of
   GetLine -> getLine
   PutLine -> putStrLn $ ">> "++ inp
 
--- | Like a Console but which can only write
+-- | Like a Console but which can only write or do nothing
 data a `Logger` b where
   Log :: String `Logger` ()
+  NoLog :: String `Logger` ()
 
 runLogger :: a `Logger` b -> a -> IO b
 runLogger Log = putStrLn
+runLogger NoLog = const $ return ()
 
 -- | The File effect
 data a `File` b where
@@ -59,16 +62,15 @@ data VerbLevel = Silent | Error | Warning | Info
   deriving (Eq, Ord, Bounded, Show, Read)
 
 -- | An AoT effect to deactivate some effects depending on some verbosity level
-newtype VerbControl a = WithVerbCtrl (VerbLevel -> Maybe a)
-  deriving (Functor)
+newtype VerbControl a = WithVerbCtrl (VerbLevel -> a)
+  deriving (Functor, Applicative) via ((->) VerbLevel)
 
 -- | Controls the verbosity level before logging in a 'Console' effect
 logS :: VerbLevel   -- ^ Minimal verbosity
      -> AnyRopeWith '[ '("logger", Logger `WithAoT` VerbControl) ] '[]
                     String ()
 logS minVerb = strand #logger $ withAoT $ WithVerbCtrl $ \level ->
-  if level >= minVerb then Just Log
-                      else Nothing
+  if level >= minVerb then Log else NoLog
 
 getContentsToOutput :: FilePath ~~> String
 getContentsToOutput = proc filename -> do
@@ -102,12 +104,11 @@ getVerbLevel = do
 main :: IO ()
 main = do
   vl <- getVerbLevel
+  print vl
   prog & loosen
-       & splitRope & entwineAllAoT (\(WithVerbCtrl f) -> case f vl of
-                                       Nothing -> returnA undefined
-                                       Just eff -> eff)
-                   & entwine #logger (asCore . asCore . toSieve . runLogger)
-                   & untwine
-       & entwine #console (asCore . toSieve . runConsole)
-       & entwine #file (asCore . toSieve . runFile)
+       & withDecomposedAoTs
+         (\(WithVerbCtrl f) -> f vl)
+         ( entwine #logger (asCore . toSieve . runLogger) )
+         ( entwine #console (asCore . toSieve . runConsole)
+         . entwine #file (asCore . toSieve . runFile) )
        & runSieveCore "You"
