@@ -56,12 +56,11 @@ data VerbLevel = Silent | Error | Warning | Info
 -- level. This is the simplest effect possible that we use as a builder here: a
 -- pure function (->).
 --
--- This builder input is a some 'VerbLevel'. Its output will some some effect
--- depending on it
+-- This builder input is a 'VerbLevel'
 type WithVerbControl = EffBuilder VerbLevel (->)
 
--- | Here we added our builder effect on top of the #logger effect that will
--- control the verbosity. This appears in the type of the #logger effect
+-- | Given we add a builder effect on top of the #logger effect, this appears in
+-- the type of the #logger effect
 type a ~~> b =
   AnyRopeWith '[ '("console", Console)
                , '("logger", WithVerbControl Logger)

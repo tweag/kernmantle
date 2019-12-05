@@ -45,7 +45,7 @@ instance (Applicative f) => EffPointedFunctor (Tannen f) where
   effpure = Tannen . pure
   {-# INLINE effpure #-}
 
--- | Would be a "BifunctorBifunctor", but that class doesn't exist
+-- | Would be a "@BifunctorBifunctor@", but that class doesn't exist
 class (forall a. (Arrow a) => (EffFunctor (p a))) => EffBifunctor p where
   effbimap :: (Arrow a) => (a :-> a') -> (b :-> b') -> p a b :-> p a' b'
   effbimap f g = efffirst f . effsecond g
@@ -53,7 +53,7 @@ class (forall a. (Arrow a) => (EffFunctor (p a))) => EffBifunctor p where
   efffirst :: (Arrow a) => (a :-> a') -> p a b :-> p a' b
   efffirst f = effbimap f id
 
--- | Would be a "ProfunctorBifunctor", but that class doesn't exist.
+-- | Would be a "@ProfunctorBifunctor@", but that class doesn't exist.
 class (forall a. (EffFunctor (p a))) => EffProfunctor p where
   effdimap :: (a' :-> a) -> (b :-> b') -> p a b :-> p a' b'
   effdimap f g = efflmap f . effrmap g

@@ -134,8 +134,6 @@ unwrapSomeStrands :: (EffFunctor f, RMap (MapStrandEffs f mantle1))
                      -- ^ What to do with the remaining strands (those not
                      -- wrapped)
                   -> RopeRunner Rec (MapStrandEffs f mantle1 ++ mantle2) interp core
-                     -- ^ The 'RopeRunner' to transform, where first strands all
-                     -- are wrapped in the @f@ EffFunctor
                  :-> RopeRunner Rec mantle1                              core'  core'
                      -- ^ The resulting 'RopeRunner', where 
 unwrapSomeStrands f g = unwrapRopeRunner . effdimap f g . splitRopeRunner

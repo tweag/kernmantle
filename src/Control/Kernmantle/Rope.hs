@@ -80,7 +80,7 @@ import Control.Kernmantle.Rope.Internal
 -- with kind * -> * -> *). These effects are called 'Strand's, they compose the
 -- @mantle@, can be interpreted in an @interp@ effect and can be interlaced "on
 -- top" of an existing @core@ effect.
-newtype Rope record mantle core a b =
+newtype Rope (record::RopeRec) (mantle::[Strand]) (core::BinEff) a b =
   Rope { getRopeRunner :: RopeRunner record mantle core core a b }
 
   deriving ( Bifunctor, Biapplicative
@@ -157,9 +157,10 @@ loosen r = mkRope $ runRope r . toARec
 -- elude the two type parameters of these effects, but these are still here.
 entwine :: Label name  -- ^ Give a name to the strand
         -> (binEff :-> LooseRope mantle core) -- ^ The execution function
-        -> LooseRope ('(name,binEff) ': mantle) core -- ^ The 'Rope' with an extra effect strand
-       :-> LooseRope mantle core -- ^ The 'Rope' with the extra effect strand
-                                     -- woven in the core
+        -> LooseRope ('(name,binEff) ': mantle) core
+       :-> LooseRope mantle core -- ^ The 'Rope' with the extra effect strand,
+                                 -- transformed into the same Rope but with that
+                                 -- effect woven in the core
 entwine _ run rope = mkRope $ \r ->
   runRope rope (Weaver (\eff -> runRope (run eff) r) :& r)
 {-# INLINE entwine #-}
@@ -231,7 +232,6 @@ onEachEffFunctor
   -> (LooseRope mantle2 core :-> LooseRope '[] core)
      -- ^ Run the effects that were not wrapped
   -> LooseRope (MapStrandEffs f mantle1 ++ mantle2) core
-     -- ^ The rope to split
  :-> LooseRope rest core
 onEachEffFunctor runWrapper runMantle1 runMantle2 =
   runMantle1 . entwineEffFunctors runWrapper (untwine . runMantle2)
