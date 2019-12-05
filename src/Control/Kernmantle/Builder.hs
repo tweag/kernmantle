@@ -6,9 +6,10 @@
 {-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE DerivingVia #-}
 
--- | This module provides Functors/Profunctors over binary effects
+-- | This module provides the API for effects ('EffBuilder') that will construct
+-- other effects
 
-module Control.Kernmantle.Functors where
+module Control.Kernmantle.Builder where
 
 import qualified Control.Applicative as App
 import Control.Arrow hiding (first, second)

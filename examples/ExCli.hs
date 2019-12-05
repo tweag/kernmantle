@@ -48,12 +48,14 @@ runFile cmd inp = case cmd of
   GetFile -> readFile inp
   PutFile -> uncurry writeFile inp
 
--- | An AoT effect to deactivate some effects depending on some verbosity
--- level. This is a Functor.
+-- | A builder (unary) effect to deactivate some effects depending on some
+-- verbosity level. This is the simplest builder possible: a function that takes
+-- some verbosity level and returns some effect depending on it. As any function
+-- in Haskell, this is a Functor over its output.
 type VerbControl = (->) VerbLevel
 
--- | Here we added an AoT effect on top of the console effect that will control
--- the verbosity
+-- | Here we added a builder effect on top of the console effect that will
+-- control the verbosity
 type a ~~> b =
   AnyRopeWith '[ '("console", Console)
                , '("logger", UnaryBuilder VerbControl Logger)

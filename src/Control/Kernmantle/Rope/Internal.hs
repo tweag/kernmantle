@@ -27,7 +27,7 @@ import GHC.TypeLits
 import Prelude hiding (id, (.))
 
 import Control.Kernmantle.Error
-import Control.Kernmantle.Functors
+import Control.Kernmantle.Builder
 
 
 -- | The kind for all binary effects. First param is usually an input

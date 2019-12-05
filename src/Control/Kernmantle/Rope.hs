@@ -74,7 +74,7 @@ import GHC.OverloadedLabels
 import Prelude hiding (id, (.))
 
 import Control.Kernmantle.Error
-import Control.Kernmantle.Functors
+import Control.Kernmantle.Builder
 import Control.Kernmantle.Rope.Internal
 
 
@@ -82,7 +82,9 @@ import Control.Kernmantle.Rope.Internal
 -- with kind * -> * -> *). These effects are called 'Strand's, they compose the
 -- @mantle@, can be interpreted in an @interp@ effect and can be interlaced "on
 -- top" of an existing @core@ effect.
-newtype Rope record mantle core a b = Rope { getRopeRunner :: RopeRunner record mantle core core a b }
+newtype Rope record mantle core a b =
+  Rope { getRopeRunner :: RopeRunner record mantle core core a b }
+
   deriving ( Bifunctor, Biapplicative
            , Category, Arrow, ArrowChoice, ArrowLoop, ArrowZero, ArrowPlus
            , Closed, Costrong, Cochoice
