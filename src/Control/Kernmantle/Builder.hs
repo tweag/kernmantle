@@ -78,9 +78,14 @@ toSieve_ = Kleisli . const
 
 
 -- | A binary effect @builder@ that returns (builds) another binary effect
--- @runner@, based on some input type @i@. Use 'efffirst' to change the
--- @builder@ effect and 'efffsecond' to change the @runner@ effect (or
--- 'effbimap' to change both altogether).
+-- @runner@, based on some input type @i@.
+--
+-- Use 'effpure' to just wrap a @runner a b@ effect inside the 'EffBuilder', and
+-- 'effbuild' to create a @builder@ effect that will return the @runner@
+-- effect.
+--
+-- Use 'efffirst' to change the @builder@ effect and 'efffsecond' to change the
+-- @runner@ effect (or 'effbimap' to change both altogether).
 newtype EffBuilder i builder runner a b =
   EffBuilder { runEffBuilder :: builder i (runner a b) }
 
@@ -98,6 +103,10 @@ newtype EffBuilder i builder runner a b =
 
 instance EffBifunctor (EffBuilder i) where
   efffirst f (EffBuilder eb) = EffBuilder $ f eb
+
+-- | Wraps an effect returning another effect inside an 'EffBuilder'
+effbuild :: builder i (runner a b) -> EffBuilder i builder runner a b
+effbuild = EffBuilder
 
 -- | An 'EffBuilder' that requires no input
 type UnaryBuilder f = EffBuilder () (ToSieve f)

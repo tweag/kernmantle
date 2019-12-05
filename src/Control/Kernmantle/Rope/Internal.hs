@@ -119,8 +119,8 @@ effmapRopeRec :: (EffFunctor f)
 effmapRopeRec RNil = RNil
 effmapRopeRec (Weaver w :& rest) = Weaver (effrmap w) :& effmapRopeRec rest
 
--- | When all the strands of a 'Rope' have the same type of ahead of time
--- effects, we can run them. See 'splitRope' to isolate some strands in a 'Rope'
+-- | When all the strands of a 'Rope' are built by the same 'EffFunctor', we can
+-- run them. See 'splitRope' to isolate some strands in a 'Rope'
 unwrapRopeRunner :: (EffFunctor f)
                  => RopeRunner Rec (MapStrandEffs f strands) (f core) core
                 :-> RopeRunner Rec strands core core

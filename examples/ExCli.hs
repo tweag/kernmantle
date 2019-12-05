@@ -6,10 +6,10 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE RankNTypes #-}
 
--- | In this example, we show how to condition some strand based on
--- ahead-of-time effects (here CLI parsing) which just need to instanciate
--- Functor
+-- | In this example, we show how to condition some strand based on a _builder_
+-- effect (here just accessing some config value) that will create our strands.
 
+import Control.Kernmantle.Builder
 import Control.Kernmantle.Error
 import Control.Kernmantle.Rope
 import Control.Arrow
@@ -48,30 +48,39 @@ runFile cmd inp = case cmd of
   GetFile -> readFile inp
   PutFile -> uncurry writeFile inp
 
--- | A builder (unary) effect to deactivate some effects depending on some
--- verbosity level. This is the simplest builder possible: a function that takes
--- some verbosity level and returns some effect depending on it. As any function
--- in Haskell, this is a Functor over its output.
-type VerbControl = (->) VerbLevel
+-- | A verbosity level (for our logger effect)
+data VerbLevel = Silent | Error | Warning | Info
+  deriving (Eq, Ord, Bounded, Show, Read)
 
--- | Here we added a builder effect on top of the console effect that will
--- control the verbosity
+-- | A builder effect to deactivate some effects depending on some verbosity
+-- level. This is the simplest effect possible that we use as a builder here: a
+-- pure function (->).
+--
+-- This builder input is a some 'VerbLevel'. Its output will some some effect
+-- depending on it
+type WithVerbControl = EffBuilder VerbLevel (->)
+
+-- | Here we added our builder effect on top of the #logger effect that will
+-- control the verbosity. This appears in the type of the #logger effect
 type a ~~> b =
   AnyRopeWith '[ '("console", Console)
-               , '("logger", UnaryBuilder VerbControl Logger)
+               , '("logger", WithVerbControl Logger)
                , '("file", File) ]
               '[ArrowChoice, TryEffect IOException]
               a b
 
-data VerbLevel = Silent | Error | Warning | Info
-  deriving (Eq, Ord, Bounded, Show, Read)
-
 -- | Controls the verbosity level before logging in a 'Console' effect
 logS :: VerbLevel   -- ^ Minimal verbosity
-     -> AnyRopeWith '[ '("logger", UnaryBuilder VerbControl Logger) ] '[]
+     -> AnyRopeWith '[ '("logger", WithVerbControl Logger) ] '[]
                     String ()
-logS minVerb = strand #logger $ unaryBuilder $ \level ->
-  if level >= minVerb then Log else NoLog
+logS minVerb = strand #logger $
+  effbuild $ -- We indicate that this strand will need to access an effect
+             -- builder ('effpure' just lifts an effect)
+    \level -> -- our builder is just a pure function, taking a verbosity level
+              -- as an input
+      if level >= minVerb then Log else NoLog
+      -- then we just have to return the Logger effect based on the verbosity
+      -- level it received as input.
 
 getContentsToOutput :: FilePath ~~> String
 getContentsToOutput = proc filename -> do
@@ -106,13 +115,13 @@ main :: IO ()
 main = do
   vl <- getVerbLevel
   prog & loosen
-       & onEachEffFunctor
-         (\f -> unaryFromBuilder f vl)
-             -- First, how to run the config effect, which is a pure function,
+       & onEachEffFunctor -- Every EffBuilder is an instance of EffFunctor
+         (\f -> runEffBuilder f vl)
+             -- First, how to run the builder effect, which is a pure function,
              -- by giving it the verbosity level read from CLI
          ( entwine #logger (asCore . toSieve . runLogger) )
-             -- Then, how to run the effects that were wrapped in these effect
-             -- wrappers
+             -- Then, how to run the effects that were wrapped in this builder
+             -- effect
          ( entwine #console (asCore . toSieve . runConsole)
          . entwine #file (asCore . toSieve . runFile) )
              -- And finally, how to run all the other effects that were _not_

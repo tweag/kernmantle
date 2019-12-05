@@ -37,7 +37,6 @@ module Control.Kernmantle.Rope
   , Entwines, SatisfiesAll
   , Label, fromLabel
   , Sieve(..), ToSieve
-  , EffBuilder, UnaryBuilder
   , type (:->)
   , (&)
 
@@ -50,7 +49,6 @@ module Control.Kernmantle.Rope
   , asCore
   , toSieve, toSieve_
 
-  , unaryBuilder, unaryFromBuilder
   , onEachEffFunctor
   , entwineEffFunctors
   )
