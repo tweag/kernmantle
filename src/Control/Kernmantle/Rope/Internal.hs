@@ -16,6 +16,7 @@ import Control.Arrow
 import Control.Monad.Trans.Reader
 import Data.Profunctor hiding (rmap)
 import Data.Bifunctor
+import Data.Biapplicative
 import Data.Bifunctor.Tannen
 import Data.Functor.Identity
 import Data.Profunctor.Cayley
@@ -65,15 +66,18 @@ mapWeaverInterp f (Weaver w) = Weaver $ f . w
 newtype RopeRunner (record::RopeRec) (mantle::[Strand]) (interp::BinEff) (core::BinEff) a b =
   RopeRunner (record (Weaver interp) mantle -> core a b)
   
-  deriving ( Category, Bifunctor
-           , Arrow, ArrowChoice, ArrowLoop, ArrowZero, ArrowPlus
+  deriving ( Bifunctor, Biapplicative
+           , Category, Arrow, ArrowChoice, ArrowLoop, ArrowZero, ArrowPlus
            , Closed, Costrong, Cochoice
            , ThrowEffect ex, TryEffect ex
            )
-    via Reader (record (Weaver interp) mantle) `Tannen` core
+    via Tannen ((->) (record (Weaver interp) mantle)) core
+
+  deriving (EffFunctor, EffPointedFunctor)
+    via Tannen ((->) (record (Weaver interp) mantle))
 
   deriving (Profunctor, Strong, Choice)
-    via Reader (record (Weaver interp) mantle) `Cayley` core
+    via Cayley ((->) (record (Weaver interp) mantle)) core
 
 instance (RMap m) => EffProfunctor (RopeRunner Rec m) where
   effdimap f g (RopeRunner run) = RopeRunner $
@@ -108,7 +112,7 @@ effmapRopeRec :: (EffFunctor f)
               => Rec (Weaver interp) strands
               -> Rec (Weaver (f interp)) (MapStrandEffs f strands)
 effmapRopeRec RNil = RNil
-effmapRopeRec (Weaver w :& rest) = Weaver (effmap w) :& effmapRopeRec rest
+effmapRopeRec (Weaver w :& rest) = Weaver (effrmap w) :& effmapRopeRec rest
 
 -- | When all the strands of a 'Rope' have the same type of ahead of time
 -- effects, we can run them. See 'splitRope' to isolate some strands in a 'Rope'

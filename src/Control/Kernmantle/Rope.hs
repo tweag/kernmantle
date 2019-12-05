@@ -59,6 +59,7 @@ where
 import Control.Category
 import Control.Arrow
 import Data.Bifunctor
+import Data.Biapplicative
 import Data.Bifunctor.Tannen
 import Data.Function ((&))
 import Data.Profunctor hiding (rmap)
@@ -82,8 +83,8 @@ import Control.Kernmantle.Rope.Internal
 -- @mantle@, can be interpreted in an @interp@ effect and can be interlaced "on
 -- top" of an existing @core@ effect.
 newtype Rope record mantle core a b = Rope { getRopeRunner :: RopeRunner record mantle core core a b }
-  deriving ( Category, Bifunctor
-           , Arrow, ArrowChoice, ArrowLoop, ArrowZero, ArrowPlus
+  deriving ( Bifunctor, Biapplicative
+           , Category, Arrow, ArrowChoice, ArrowLoop, ArrowZero, ArrowPlus
            , Closed, Costrong, Cochoice
            , ThrowEffect ex, TryEffect ex
            , Profunctor, Strong, Choice
@@ -233,9 +234,9 @@ entwineEffFunctors f g (Rope rnr) = Rope $ unwrapSomeStrands f (g . Rope) rnr
 -- Note that the function to run the effect wrappers is executed _once per
 -- wrapper_ used along the 'Rope', so keep that function light.
 --
--- Note: The UX for 'onEachEffFunctor' is not great. Though it is quite
--- simple, it forces either to run everything at once, or to do some trickery by
--- returning some effecting in the core. We should try to improve that.
+-- Note: The UX for 'onEachEffFunctor' is not great. Though it is quite simple,
+-- it forces either to run everything at once, or to do some trickery by
+-- returning some effect in the core. We should try to improve that.
 onEachEffFunctor
   :: (EffFunctor f, RMap (MapStrandEffs f mantle1))
   => (f core :-> core)  -- ^ Run the wrapper effects
@@ -249,3 +250,4 @@ onEachEffFunctor
 onEachEffFunctor runWrapper runMantle1 runMantle2 =
   runMantle1 . entwineEffFunctors runWrapper (untwine . runMantle2)
 {-# INLINE onEachEffFunctor #-}
+
