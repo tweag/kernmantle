@@ -37,6 +37,7 @@ module Control.Kernmantle.Rope
   , Entwines, SatisfiesAll
   , Label, fromLabel
   , Sieve(..), ToSieve
+  , EffBuilder, UnaryBuilder
   , WrappingEff
   , type (:->)
   , (&)
@@ -202,20 +203,6 @@ runSieveCore :: (Sieve biEff uEff)
              => a -> LooseRope '[] biEff a b -> uEff b
 runSieveCore a r = sieve (untwine r) a
 {-# INLINE runSieveCore #-}
-
--- | A 'Sieve' is a binary effect constructed from a functorial (or monadic)
--- unary effect.
-type ToSieve = Kleisli
-
--- | Turns a function computing a functorial/monadic effect to a binary effect
-toSieve :: (a -> ueff b) -> ToSieve ueff a b
-toSieve = Kleisli
-{-# INLINE toSieve #-}
-
--- | Turns a functorial/monadic effect into a binary effect
-toSieve_ :: ueff x -> ToSieve ueff () x
-toSieve_ = Kleisli . const
-{-# INLINE toSieve_ #-}
 
 entwineEffFunctors
   :: (EffFunctor f, RMap (MapStrandEffs f mantle1))

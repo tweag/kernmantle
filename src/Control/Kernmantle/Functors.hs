@@ -57,6 +57,21 @@ class (forall a. (EffFunctor (p a))) => EffProfunctor p where
   efflmap f = effdimap f id
 
 
+-- | A 'Sieve' is a binary effect constructed from a functorial (or monadic)
+-- unary effect.
+type ToSieve = Kleisli
+
+-- | Turns a function computing a functorial/monadic effect to a binary effect
+toSieve :: (a -> ueff b) -> ToSieve ueff a b
+toSieve = Kleisli
+{-# INLINE toSieve #-}
+
+-- | Turns a functorial/monadic effect into a binary effect
+toSieve_ :: ueff x -> ToSieve ueff () x
+toSieve_ = Kleisli . const
+{-# INLINE toSieve_ #-}
+
+
 -- | Adds some ahead-of-time unary (functorial) effects to any binary effect,
 -- that should be executed /before/ we get to the binary effect. These
 -- ahead-of-time effects can be CLI parsing, access to some configuration,
@@ -97,3 +112,14 @@ newtype EffBuilder i builder runner a b =
 
 instance EffBifunctor (EffBuilder i) where
   efffirst f (EffBuilder eb) = EffBuilder $ f eb
+
+-- | An 'EffBuilder' that requires no input
+type UnaryBuilder f = EffBuilder () (ToSieve f)
+
+-- | Turns a unary effect returning an effect into an 'EffBuilder'
+unaryBuilder :: f (eff a b) -> UnaryBuilder f eff a b
+unaryBuilder f = EffBuilder (Kleisli $ const $ f)
+
+-- | Unwraps a unary effect from a 'SimpleEffBuilder'
+unaryFromBuilder :: UnaryBuilder f eff a b -> f (eff a b)
+unaryFromBuilder (EffBuilder (Kleisli f)) = f ()
