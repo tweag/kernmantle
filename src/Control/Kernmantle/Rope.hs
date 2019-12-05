@@ -38,7 +38,6 @@ module Control.Kernmantle.Rope
   , Label, fromLabel
   , Sieve(..), ToSieve
   , EffBuilder, UnaryBuilder
-  , WrappingEff
   , type (:->)
   , (&)
 
@@ -51,7 +50,7 @@ module Control.Kernmantle.Rope
   , asCore
   , toSieve, toSieve_
 
-  , withEffWrapper, getEffWrapper
+  , unaryBuilder, unaryFromBuilder
   , onEachEffFunctor
   , entwineEffFunctors
   )
@@ -237,4 +236,3 @@ onEachEffFunctor
 onEachEffFunctor runWrapper runMantle1 runMantle2 =
   runMantle1 . entwineEffFunctors runWrapper (untwine . runMantle2)
 {-# INLINE onEachEffFunctor #-}
-

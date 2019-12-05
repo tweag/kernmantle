@@ -56,7 +56,7 @@ type VerbControl = (->) VerbLevel
 -- the verbosity
 type a ~~> b =
   AnyRopeWith '[ '("console", Console)
-               , '("logger", VerbControl `WrappingEff` Logger)
+               , '("logger", UnaryBuilder VerbControl Logger)
                , '("file", File) ]
               '[ArrowChoice, TryEffect IOException]
               a b
@@ -66,9 +66,9 @@ data VerbLevel = Silent | Error | Warning | Info
 
 -- | Controls the verbosity level before logging in a 'Console' effect
 logS :: VerbLevel   -- ^ Minimal verbosity
-     -> AnyRopeWith '[ '("logger", VerbControl `WrappingEff` Logger) ] '[]
+     -> AnyRopeWith '[ '("logger", UnaryBuilder VerbControl Logger) ] '[]
                     String ()
-logS minVerb = strand #logger $ withEffWrapper $ \level ->
+logS minVerb = strand #logger $ unaryBuilder $ \level ->
   if level >= minVerb then Log else NoLog
 
 getContentsToOutput :: FilePath ~~> String
@@ -105,7 +105,7 @@ main = do
   vl <- getVerbLevel
   prog & loosen
        & onEachEffFunctor
-         (\f -> getEffWrapper f vl)
+         (\f -> unaryFromBuilder f vl)
              -- First, how to run the config effect, which is a pure function,
              -- by giving it the verbosity level read from CLI
          ( entwine #logger (asCore . toSieve . runLogger) )

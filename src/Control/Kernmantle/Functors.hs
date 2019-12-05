@@ -40,6 +40,10 @@ effsecond = bifmap
 class (EffFunctor f) => EffPointedFunctor f where
   effpure :: eff :-> f eff
 
+instance (Applicative f) => EffPointedFunctor (Tannen f) where
+  effpure = Tannen . pure
+  {-# INLINE effpure #-}
+
 -- | Would be a "BifunctorBifunctor", but that class doesn't exist
 class (forall a. (Arrow a) => (EffFunctor (p a))) => EffBifunctor p where
   effbimap :: (Arrow a) => (a :-> a') -> (b :-> b') -> p a b :-> p a' b'
@@ -72,25 +76,6 @@ toSieve_ = Kleisli . const
 {-# INLINE toSieve_ #-}
 
 
--- | Adds some ahead-of-time unary (functorial) effects to any binary effect,
--- that should be executed /before/ we get to the binary effect. These
--- ahead-of-time effects can be CLI parsing, access to some configuration,
--- pre-processing of the compute graph, etc.
-type WrappingEff = Tannen
-
--- | Adds the 'WrappingEff' layer
-withEffWrapper :: f (eff x y) -> (f `WrappingEff` eff) x y
-withEffWrapper = Tannen
-
--- | Removes the 'WrappingEff' layer
-getEffWrapper :: (f `WrappingEff` eff) x y -> f (eff x y)
-getEffWrapper = runTannen
-
-instance (Applicative f) => EffPointedFunctor (WrappingEff f) where
-  effpure = withEffWrapper . pure
-  {-# INLINE effpure #-}
-
-
 -- | A binary effect @builder@ that returns (builds) another binary effect
 -- @runner@, based on some input type @i@. Use 'efffirst' to change the
 -- @builder@ effect and 'efffsecond' to change the @runner@ effect (or
@@ -118,7 +103,7 @@ type UnaryBuilder f = EffBuilder () (ToSieve f)
 
 -- | Turns a unary effect returning an effect into an 'EffBuilder'
 unaryBuilder :: f (eff a b) -> UnaryBuilder f eff a b
-unaryBuilder f = EffBuilder (Kleisli $ const $ f)
+unaryBuilder f = EffBuilder (Kleisli $ const f)
 
 -- | Unwraps a unary effect from a 'SimpleEffBuilder'
 unaryFromBuilder :: UnaryBuilder f eff a b -> f (eff a b)
