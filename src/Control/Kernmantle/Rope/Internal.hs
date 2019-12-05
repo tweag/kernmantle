@@ -63,6 +63,11 @@ mapWeaverInterp :: (interp :-> interp')
 mapWeaverInterp f (Weaver w) = Weaver $ f . w
 {-# INLINE mapWeaverInterp #-}
 
+-- | The internal implementation of a Rope, where @interp@ and @core@ can be two
+-- different types (this facilitates implementation of some functions).
+--
+-- @record@ holds the functions to interpret the @strands@ in an @interp@
+-- effect. And then all these interpreted effects will run in a @core@ effect.
 newtype RopeRunner (record::RopeRec) (mantle::[Strand]) (interp::BinEff) (core::BinEff) a b =
   RopeRunner (record (Weaver interp) mantle -> core a b)
   
