@@ -138,3 +138,4 @@ unwrapSomeStrands :: (EffFunctor f, RMap (MapStrandEffs f mantle1))
                      -- ^ The resulting 'RopeRunner', where 
 unwrapSomeStrands f g = unwrapRopeRunner . effdimap f g . splitRopeRunner
 {-# INLINE unwrapSomeStrands #-}
+

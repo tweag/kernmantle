@@ -236,3 +236,16 @@ onEachEffFunctor
 onEachEffFunctor runWrapper runMantle1 runMantle2 =
   runMantle1 . entwineEffFunctors runWrapper (untwine . runMantle2)
 {-# INLINE onEachEffFunctor #-}
+
+-- groupBuilderStrands
+--   :: ( RetwinableAs Rec (MapStrandEffs (EffBuilder i builderEff) runnerEffs)
+--                         core flatMantle
+--      , RetwinableAs Rec mantleRest core flatMantle )
+--   -> Label groupedRopeName
+--   -> LooseRope flatMantle core
+--  :-> LooseRope ( '(groupedRopeName, EffBuilder i builderEff
+--                                       (LooseRope runnerEffs core))
+--                  ': mantleRest )
+--                core
+-- groupBuilder _ rope = mkRope $ \(Weaver weaveGroupedStrand :& rest) ->
+--   runRope rope

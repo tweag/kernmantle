@@ -31,11 +31,9 @@ runConsole cmd inp = case cmd of
 -- | Like a Console but which can only write or do nothing
 data a `Logger` b where
   Log :: String `Logger` ()
-  NoLog :: String `Logger` ()
 
 runLogger :: a `Logger` b -> a -> IO b
 runLogger Log = putStrLn
-runLogger NoLog = const $ return ()
 
 -- | The File effect
 data a `File` b where
@@ -53,11 +51,11 @@ data VerbLevel = Silent | Error | Warning | Info
   deriving (Eq, Ord, Bounded, Show, Read)
 
 -- | A builder effect to deactivate some effects depending on some verbosity
--- level. This is the simplest effect possible that we use as a builder here: a
--- pure function (->).
+-- level. It builds an @eff@ that can be bypassed (via @Skippable@) by a simple
+-- function.
 --
 -- This builder input is a 'VerbLevel'
-type WithVerbControl = EffBuilder VerbLevel (->)
+type WithVerbControl eff = EffBuilder VerbLevel (->) (Bypass eff)
 
 -- | Given we add a builder effect on top of the #logger effect, this appears in
 -- the type of the #logger effect
@@ -77,9 +75,10 @@ logS minVerb = strand #logger $
              -- builder ('effpure' just lifts an effect)
     \level -> -- our builder is just a pure function, taking a verbosity level
               -- as an input
-      if level >= minVerb then Log else NoLog
-      -- then we just have to return the Logger effect based on the verbosity
-      -- level it received as input.
+      if level >= minVerb  -- Depending on the verbosity level:
+      then bypassEff_ ()   -- we either bypass the Log effect (giving a const
+                           -- value),
+      else performEff Log  -- or we use it the Log effect.
 
 getContentsToOutput :: FilePath ~~> String
 getContentsToOutput = proc filename -> do
@@ -118,7 +117,7 @@ main = do
          (\f -> runEffBuilder f vl)
              -- First, how to run the builder effect, which is a pure function,
              -- by giving it the verbosity level read from CLI
-         ( entwine #logger (asCore . toSieve . runLogger) )
+         ( entwine #logger (asCore . runBypassWith (toSieve . runLogger)) )
              -- Then, how to run the effects that were wrapped in this builder
              -- effect
          ( entwine #console (asCore . toSieve . runConsole)

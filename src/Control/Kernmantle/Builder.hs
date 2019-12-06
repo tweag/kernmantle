@@ -17,6 +17,7 @@ import Control.Category
 import Data.Biapplicative (Biapplicative)
 import Data.Bifunctor
 import Data.Bifunctor.Functor
+import Data.Bifunctor.Sum
 import Data.Bifunctor.Tannen
 import Data.Profunctor hiding ((:->))
 import qualified Data.Profunctor as Pro
@@ -118,3 +119,23 @@ unaryBuilder f = EffBuilder (Kleisli $ const f)
 -- | Unwraps a unary effect from a 'SimpleEffBuilder'
 unaryFromBuilder :: UnaryBuilder f eff a b -> f (eff a b)
 unaryFromBuilder (EffBuilder (Kleisli f)) = f ()
+
+-- | Wraps an effect so that it can be bypassed
+type Bypass = Sum (->)
+
+-- | Don't bypass an effect
+performEff :: eff a b -> Bypass eff a b
+performEff = R2
+
+-- | Bypass an effect, using some pure function instead
+bypassEff :: (a -> b) -> Bypass eff a b
+bypassEff = L2
+
+-- | Bypass an effect, always returning some pure value instead
+bypassEff_ :: b -> Bypass eff a b
+bypassEff_ = L2 . const
+
+-- | Runs a @Bypass eff@ in some @Arrow@
+runBypassWith :: (Arrow arr) => (eff :-> arr) -> Bypass eff a b -> arr a b
+runBypassWith _ (L2 f) = arr f
+runBypassWith f (R2 eff) = f eff
