@@ -68,6 +68,7 @@ import Data.Vinyl.Functor
 import Data.Vinyl.TypeLevel
 import GHC.Exts
 import GHC.OverloadedLabels
+import GHC.TypeLits
 
 import Prelude hiding (id, (.))
 
@@ -86,9 +87,24 @@ newtype Rope (record::RopeRec) (mantle::[Strand]) (core::BinEff) a b =
   deriving ( Bifunctor, Biapplicative
            , Category, Arrow, ArrowChoice, ArrowLoop, ArrowZero, ArrowPlus
            , Closed, Costrong, Cochoice
-           , ThrowEffect ex, TryEffect ex
            , Profunctor, Strong, Choice
+           , ThrowEffect ex, TryEffect ex
+           , StatefulEff
            )
+
+-- | Just to fix the right kind for the record
+type family StateRecFromRopeRec a where
+  StateRecFromRopeRec Rec = Rec
+  StateRecFromRopeRec ARec = ARec
+
+-- | Maps a stateful effect to its state type
+type family StateOfEff (eff::BinEff) :: *
+
+type family StatesFromStrands strands where
+  StatesFromStrands '[] = '[]
+  StatesFromStrands (s ': r) = '(StrandName s, StateOfEff (StrandEff s)) ': StatesFromStrands r
+
+type States r strands = StateRecFromRopeRec r ElField (StatesFromStrands strands)
 
 runRope :: Rope record mantle core a b -> record (Weaver core) mantle -> core a b
 runRope (Rope (RopeRunner f)) = f
@@ -156,14 +172,42 @@ loosen r = mkRope $ runRope r . toARec
 -- preserving the input/output type params of these effects. It allows us to
 -- elude the two type parameters of these effects, but these are still here.
 entwine :: Label name  -- ^ Give a name to the strand
-        -> (binEff :-> LooseRope mantle core) -- ^ The execution function
+        -> (binEff :-> LooseRope mantle core)
+                       -- ^ Execute each strand's effect
         -> LooseRope ('(name,binEff) ': mantle) core
-       :-> LooseRope mantle core -- ^ The 'Rope' with the extra effect strand,
-                                 -- transformed into the same Rope but with that
-                                 -- effect woven in the core
+       :-> LooseRope mantle core
+                       -- ^ The 'Rope' with the extra effect strand, transformed
+                       -- into the same Rope but with that effect woven in the
+                       -- core
 entwine _ run rope = mkRope $ \r ->
   runRope rope (Weaver (\eff -> runRope (run eff) r) :& r)
 {-# INLINE entwine #-}
+
+-- -- | 'statefulEntwine' and 'bracketEntwine' need the core to be wrapped in
+-- -- 'Stateful'
+-- withStatefulRope
+--   :: (   Rope r mantle (Stateful states core)
+--      :-> Rope r mantle' (Stateful '[] core))
+--   -> Rope r mantle core
+--  :-> Rope r mantle' core
+-- withStatefulRope fn rope = mkRope $ \r ->
+--   runRope rope ()
+
+-- -- | Like 'entwine', but stateful
+-- bracketEntwine
+--   :: (StatefulEff core, Arrow core)  -- core_ is an arity-3 type
+--   => Label name   -- ^ The name of the strand
+--   -> LooseRope mantle core a s -- ^ Create the needed state
+--   -> LooseRope mantle core s () -- ^ Finalize the end state
+--   -> (forall a b. binEff a b -> LooseRope mantle core' (a,s) (b,s))
+--                   -- ^ Execute each strand's effect
+--   -> LooseRope ('(name,binEff) ': mantle) core' a b
+--   -> LooseRope mantle core a b
+-- bracketEntwine l init finalize run rope = proc a -> do
+--   st <- init -< input
+--   (b,st') <- changeEffState (entwine l run rope) -< (a, st)
+--   finalize -< st'
+--   returnA -< b
 
 -- | Runs an effect directly in the core. You should use that function only as
 -- part of a call to 'entwine'.

@@ -8,12 +8,16 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE TupleSections #-}
 
 module Control.Kernmantle.Rope.Internal where
 
 import Control.Category
 import Control.Arrow
 import Control.Monad.Trans.Reader
+import Control.Monad.Trans.State.Strict
 import Data.Profunctor hiding (rmap)
 import Data.Bifunctor
 import Data.Biapplicative
@@ -75,6 +79,7 @@ newtype RopeRunner (record::RopeRec) (mantle::[Strand]) (interp::BinEff) (core::
            , Category, Arrow, ArrowChoice, ArrowLoop, ArrowZero, ArrowPlus
            , Closed, Costrong, Cochoice
            , ThrowEffect ex, TryEffect ex
+           , StatefulEff
            )
     via Tannen ((->) (record (Weaver interp) mantle)) core
 
@@ -139,3 +144,23 @@ unwrapSomeStrands :: (EffFunctor f, RMap (MapStrandEffs f mantle1))
 unwrapSomeStrands f g = unwrapRopeRunner . effdimap f g . splitRopeRunner
 {-# INLINE unwrapSomeStrands #-}
 
+-- | A class for effects which can pass a state around and modify it
+class StatefulEff eff where
+  type EffState eff
+  type ChangeEffState eff s' :: BinEff
+  withEffState :: eff (a,EffState eff) (b,EffState eff) -> eff a b
+  changeEffState :: ChangeEffState eff s' a b -> eff (a,s') (b,s')
+
+instance (Functor f, StatefulEff eff) => StatefulEff (Tannen f eff) where
+  type EffState (Tannen f eff) = EffState eff
+  type ChangeEffState (Tannen f eff) s' = Tannen f (ChangeEffState eff s')
+  withEffState (Tannen f) = Tannen $ withEffState <$> f
+  changeEffState (Tannen f) = Tannen $ changeEffState <$> f
+
+instance (Functor m) => StatefulEff (Kleisli (StateT s m)) where
+  type EffState (Kleisli (StateT s m)) = s
+  type ChangeEffState (Kleisli (StateT s m)) s' = Kleisli (StateT s' m)
+  withEffState (Kleisli fn) = Kleisli $ \a -> StateT $ \s -> do
+    fst <$> runStateT (fn (a,s)) s
+  changeEffState (Kleisli fn) = Kleisli $ \(a,s') -> StateT $ \s -> do
+    (,s) <$> runStateT (fn a) s'
