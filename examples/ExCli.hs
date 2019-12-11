@@ -51,7 +51,7 @@ data VerbLevel = Silent | Error | Warning | Info
   deriving (Eq, Ord, Bounded, Show, Read)
 
 -- | A builder effect to deactivate some effects depending on some verbosity
--- level. It builds an @eff@ that can be bypassed (via @Skippable@) by a simple
+-- level. It builds an @eff@ that can be bypassed (via 'Bypass') by a simple
 -- function.
 --
 -- This builder input is a 'VerbLevel'
