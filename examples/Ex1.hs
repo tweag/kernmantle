@@ -70,21 +70,27 @@ prog = proc name -> do
   strand #console PutLine -< contents
 
 main :: IO ()
-main = prog & loosen -- We tell that prog should be a TightRope, and at the same
+main = prog -- Rope ARec '[("warnConsole",Console),("console",Console),("file",File),("io",Kleisli IO)] (Kleisli IO) String ()
+            & loosen -- We tell that prog should be a TightRope, and at the same
                      -- time turn it into a LooseRope, whose effects can be
                      -- executed one after the other
+            -- Rope Rec '[("warnConsole",Console),("console",Console),("file",File),("io",Kleisli IO)] (Kleisli IO) String ()
             & mergeStrands #console #warnConsole
                -- We used a second Console effect for warnings in prog. We
                -- redirect it to #console
+            -- Rope Rec '[("console",Console),("file",File),("io",Kleisli IO)] (Kleisli IO) String ()
             & entwine #console (strand #io . toSieve . runConsole)
                -- runConsole result just runs in IO. So we ask for a new #io
                -- strand to hold the interpreted console effects...
+            -- Rope Rec '[("file",File),("io",Kleisli IO)] (Kleisli IO) String ()
             & entwine #file interpFile
                -- ...that #io strand will be reused by the interpreted File
                -- effects...
+            -- Rope Rec '[("io",Kleisli IO)] (Kleisli IO) String ()
             & entwine #io asCore
                -- ...then set this #io strand to be directly interpreted in the
                -- core...
+            -- Rope Rec '[] (Kleisli IO) String ()
             & runSieveCore "You"
                -- ...and then we run the core with the input of prog
 
