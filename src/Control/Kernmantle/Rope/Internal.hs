@@ -19,8 +19,8 @@ import Control.Arrow
 import Control.Monad.Trans.Reader
 import Control.Monad.Trans.State.Strict
 import Data.Profunctor hiding (rmap)
-import Data.Bifunctor
-import Data.Biapplicative
+import Data.Bifunctor hiding (second)
+import Data.Biapplicative hiding (second)
 import Data.Bifunctor.Tannen
 import Data.Functor.Identity
 import Data.Profunctor.Cayley
@@ -144,23 +144,38 @@ unwrapSomeStrands :: (EffFunctor f, RMap (MapStrandEffs f mantle1))
 unwrapSomeStrands f g = unwrapRopeRunner . effdimap f g . splitRopeRunner
 {-# INLINE unwrapSomeStrands #-}
 
+-- | Change the state type of a 'StatefulEff'
+type family ChangeEffState (eff::BinEff) s' :: BinEff
+
 -- | A class for effects which can pass a state around and modify it
 class StatefulEff eff where
   type EffState eff
-  type ChangeEffState eff s' :: BinEff
   withEffState :: eff (a,EffState eff) (b,EffState eff) -> eff a b
   changeEffState :: ChangeEffState eff s' a b -> eff (a,s') (b,s')
 
+-- | Locally change the state of an effect to some @s'@
+mapEffState :: (StatefulEff eff, Arrow eff)
+            => (EffState eff -> s')
+            -> (s' -> EffState eff)
+            -> ChangeEffState eff s' a b
+            -> eff a b
+mapEffState to from eff = withEffState $
+  second (arr to) >>> changeEffState eff >>> second (arr from)
+
+type instance ChangeEffState (Tannen f eff) s' = Tannen f (ChangeEffState eff s')
+
 instance (Functor f, StatefulEff eff) => StatefulEff (Tannen f eff) where
   type EffState (Tannen f eff) = EffState eff
-  type ChangeEffState (Tannen f eff) s' = Tannen f (ChangeEffState eff s')
   withEffState (Tannen f) = Tannen $ withEffState <$> f
   changeEffState (Tannen f) = Tannen $ changeEffState <$> f
 
+type instance ChangeEffState (Kleisli (StateT s m)) s' = Kleisli (StateT s' m)
+
 instance (Functor m) => StatefulEff (Kleisli (StateT s m)) where
   type EffState (Kleisli (StateT s m)) = s
-  type ChangeEffState (Kleisli (StateT s m)) s' = Kleisli (StateT s' m)
   withEffState (Kleisli fn) = Kleisli $ \a -> StateT $ \s -> do
     fst <$> runStateT (fn (a,s)) s
   changeEffState (Kleisli fn) = Kleisli $ \(a,s') -> StateT $ \s -> do
     (,s) <$> runStateT (fn a) s'
+
+type instance ChangeEffState (RopeRunner r m i c) s' = RopeRunner r m i (ChangeEffState c s')

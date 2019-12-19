@@ -15,6 +15,7 @@
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE Arrows #-}
 
 -- | A 'Rope' connects together various effect 'Strand's that get interlaced
 -- together.
@@ -89,8 +90,15 @@ newtype Rope (record::RopeRec) (mantle::[Strand]) (core::BinEff) a b =
            , Closed, Costrong, Cochoice
            , Profunctor, Strong, Choice
            , ThrowEffect ex, TryEffect ex
-           , StatefulEff
            )
+
+type instance ChangeEffState (Rope r m c) s' = Rope r m (ChangeEffState c s')
+
+instance (StatefulEff c, Arrow c) => StatefulEff (Rope r m c) where
+  type EffState (Rope r m c) = EffState c
+  withEffState (Rope rnr) = Rope $ withEffState rnr
+  changeEffState (Rope (RopeRunner f)) = Rope $ RopeRunner $ \r ->
+    f r
 
 -- | Just to fix the right kind for the record
 type family StateRecFromRopeRec a where
@@ -204,8 +212,8 @@ entwine _ run rope = mkRope $ \r ->
 --   -> LooseRope ('(name,binEff) ': mantle) core' a b
 --   -> LooseRope mantle core a b
 -- bracketEntwine l init finalize run rope = proc a -> do
---   st <- init -< input
---   (b,st') <- changeEffState (entwine l run rope) -< (a, st)
+--   st <- init -< a
+--   (b,st') <- changeEffState (entwine l run rope) -< (a,st)
 --   finalize -< st'
 --   returnA -< b
 
