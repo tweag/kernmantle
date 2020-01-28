@@ -13,7 +13,7 @@ eff1 >>> eff2 >>> eff1 >>> eff3 >>> eff1 >>> eff1 >>> eff2
 where each effect can transmit its result to the next one.
 
 This chain of interlaced effects is the `Rope`. Each effect is lifted in the
-`Rope` with the `strand` function. Effects can be interpreted (transform to an actual calculation, possibly with side-effects, or to other effect types) thanks to the `entwine`
+`Rope` with the `strand` function. Effects can be interpreted (transformed to an actual calculation, possibly with side-effects, or to other effect types) thanks to the `entwine`
 function.
 
 ## To build
