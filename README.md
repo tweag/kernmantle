@@ -1,7 +1,8 @@
 # Kernmantle
 
 Kernmantle braids some strands of effects into a `Rope` that will be the basis
-of your application. By "effect", understand "anything that is not a pure computation
+of your application. By "effect", understand "any type representing a pure function or an impure (with side effects
+in the general sense) computation
 from an input value to an output value". The effects are interlaced, meaning they can be chained
 like the following:
 
