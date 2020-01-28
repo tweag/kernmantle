@@ -16,6 +16,10 @@ This chain of interlaced effects is the `Rope`. Each effect is lifted in the
 `Rope` with the `strand` function. Effects can be interpreted (transformed to an actual calculation, possibly with side-effects, or to other effect types) thanks to the `entwine`
 function.
 
+Each effect can represent some task in a pipeline. The way each task will be executed completely depends on the final interpretation functions given to `entwine`. That makes each task of the pipeline fully configurable, and each task or pipeline of tasks very easy to share and reuse. This also (as does any arrow pipeline) gives you the capacity to analyse the pipeline ahead-of-time, before it even runs.
+
+More detailed information about the interest of this paradigm in the context of data science can be found in the [porcupine package documentation](https://tweag.github.io/porcupine/), which uses this paradigm.
+
 ## To build
 
 Recommended way is to use nix. Run `nix-shell` and in the shell just run `cabal
