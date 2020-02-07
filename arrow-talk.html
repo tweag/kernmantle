@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Arrows</title>
+    <meta charset="utf-8">
+    <style>
+      @import url(https://fonts.googleapis.com/css?family=Yanone+Kaffeesatz);
+      @import url(https://fonts.googleapis.com/css?family=Droid+Serif:400,700,400italic);
+      @import url(https://fonts.googleapis.com/css?family=Ubuntu+Mono:400,700,400italic);
+
+      body { font-family: 'Droid Serif'; }
+      h1, h2, h3 {
+        font-family: 'Yanone Kaffeesatz';
+        font-weight: normal;
+      }
+      h1 {
+        color: #5f00aa;
+      }
+      h2, h3, h4 {
+        color: SlateBlue;
+      }
+      .remark-code, .remark-inline-code { font-family: 'Ubuntu Mono'; }
+
+      img {
+      display: block;
+      margin-left: auto;
+      margin-right: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <textarea id="source">
+
+class: middle, right
+# Categories and Arrows:<br/>What Do They Do? Do They Do Things??<br/>Let's Find Out!
+
+.footnote[A massively informal introduction to what makes arrows arrows]
+
+---
+
+# What is an Arrow?
+
+In category therory, an arrow, is... well... an arrow in a diagram. Mostly.
+
+Official definition: _stuff that maps other stuff to moar stuff_ (ie. a morphism).
+
+...yeah, ask Arnaud or Krzysztof about that really...
+
+---
+
+# What is an Arrow _in Haskell_?
+
+As is usual in Haskell, an ungodly mess of typeclasses, I'm afraid.
+
+#### In a nutshell:
+
+```haskell
+data A x y  -- `Type -> Type -> Type` kind
+```
+
+An arrow is a computation from `x` to `y` with... some effects. And you can
+compose them to build a pipeline of computations.
+
+#### The Arrow typeclass stack:
+
+```haskell
+-- From most OK to least OK:
+class Category    -- We're cool
+class Arrow       -- Oh wowie! Parallel composition, still cool
+class ArrowZero   -- Mostly chill
+class ArrowPlus   -- Hmmm, okaaayyy...
+class ArrowLoop   -- Oh, some Tardis-trickery, I can deal with it I guess...
+class ArrowChoice -- Wait, we're /branching/ now? But I thought
+                  -- we were making a static pipeline of...
+class ArrowApply  -- PINEAPPLE! PINEAPPLE!
+```
+
+---
+
+# Preliminary Warning
+
+![Never use ArrowApply](https://i.imgflip.com/3hhbzp.jpg)
+
+Rather: use monads directly. They're cool.
+
+---
+
+# A general form for Arrows
+
+#### Not the _MOST_ general form, but still a general and useful one:
+
+```haskell
+newtype ArrowFromEffects f w m a b =
+  ArrowFromEffects (f (w a -> m b))
+```
+
+- `f`: Applicative
+- `w`: Comonad
+- `m`: Monad
+- `w` and `m`: Distributive (ie. `w (m a) -> m (w a)`)
+- Then: `ArrowFromEffects f w m` is `Arrow`, yay
+
+And if `f`, `w` and `m` are just `Identity`, then we just have... a pure function.
+
+#### Decomposing that gives:
+
+```haskell
+newtype Kleisli m a b    = Kleisli (a -> m b)   -- from base
+newtype Cokleisli w a b  = Cokleisli (w a -> b) -- from comonad
+newtype Tannen f arr a b = Tannen (f (arr a b)) -- from bifunctors
+```
+
+Each implements all the classes up to `ArrowChoice`
+
+---
+
+# Composing Arrows
+
+#### Product
+
+```haskell
+type Product arr arr' a b = (arr a b, arr' a b)
+```
+
+`arr` and `arr'` fully parallel. Cannot communicate. Implements whatever classes
+`arr` and `arr'` both implement.
+
+#### Alternation
+
+```haskell
+data Altern arr arr' a b where
+  AlternId :: Altern arr arr' a a
+  Altern   :: arr a x -> arr' x y -> Altern arr arr' y b -> Altern arr arr' a b
+```
+
+Can communicate. Implements at least Category and Arrow (didn't try the rest
+yet. Also didn't check if it satisfies Arrow laws yet (Booooo me, yes I know))
+
+---
+
+# Free Arrows
+
+Create an arrow out of a `eff :: Type -> Type -> Type` datatype which doesn't
+have to implement anything:
+
+#### Initial encoding
+
+```haskell
+data FreeArrow eff a b where
+  Id    :: FreeArrow eff a a
+  Arr   :: (a -> b) -> FreeArrow eff a b
+  Eff   :: eff a b -> FreeArrow eff a b
+  Comp  :: FreeArrow eff a b -> FreeArrow eff b c -> FreeArrow eff a c
+  First :: FreeArrow eff a b -> FreeArrow (a,c) (b,c)
+```
+
+#### Final ~~countdown~~ encoding
+
+```haskell
+type FreeArrow eff a b =
+  forall ar. (Arrow ar) => (forall x y. eff x y -> ar x y) -> ar a b
+```
+
+---
+
+# Summary
+
+- Kleisli (used in `funflow`)
+- Cokleisli
+- Tannen (used in `porcupine`)
+- Product (to be used in `porcupine`)
+- Alternation
+- Free arrows (used in `funflow`)
+
+### Do these cover all the ways to define an arrow?
+
+Let's say that's left as an exercise to the reader :) (Pheeewww...)
+
+### What about that "profunctor" cr*p I hear about?
+
+`Arrow` = `Category` ∩ `Profunctor` ∩ `Strong` ∩ `arr` method
+
+but these aren't all in `base` for now.
+
+---
+
+# What was the point?
+
+```haskell
+newtype ArrowFromEffects f w m a b =
+    ArrowFromEffects (f (w a -> m b))
+```
+
+An arrow is the combination of monadic, comonadic and applicative
+effects, or some parallel/sequential combination of that, itself possibly
+wrapped in an applicative. Pretty general a framework.
+
+_**Arrow = computation with ahead-of-time effects (applicative) and just-in-time
+effects (monadic)**_
+
+Defining applicative and monadic effects easy: lots of them around, lots of libraries.
+
+Decomposing applicative effects as separate types (to `Compose` them) clean and
+easy.
+
+Use of comonadic effects? ...Could come handy. Dunno, still processing, some
+papers to read and all.
+
+
+### IMHO: Very relevant for code decomposition and reusability
+
+---
+
+# Comparison with Applicative
+
+_In case of no monadic effects_, one could argue that:
+
+```haskell
+type Arr a b = f (a -> b)
+```
+
+Same power? Do we _really_ need arrows? (= Couldn't we have an equivalent for
+every class this way?)
+
+### Let's try to implement the Arrow stack with that type:
+
+```haskell
+class Category    -- Yup
+class Arrow       -- Yup
+class ArrowZero   -- Alternative is there, so yup
+class ArrowPlus   -- Yup, for same reasons
+class ArrowLoop   -- Oh, oh, wait, wait, is it... and yes that's a yup
+class ArrowChoice -- Yes... Aaaand dammit, no, it doesn't have the right semantics
+class ArrowApply  -- Lol
+```
+
+`ArrowChoice` doesn't have the right semantics (though it satisfies Arrow
+laws!): you can't shortcut effects.
+
+---
+
+# Comparison with Applicative (2)
+
+### Wait! Now we have `Selective`!!
+
+...Yeah. Still no ArrowChoice, sorry...
+
+```haskell
+branch :: (Selective f)
+       => f (a -> c) -> f (b -> d) -> f (Etiher a b) -> f (Either c d)
+(|||)  :: (ArrowChoice arr)
+       => arr a c    -> arr b d    -> arr (Either a b)    (Either c d)
+```
+
+If `arr` is `f (a -> b)` that gives:
+
+```haskell
+branch :: f (a -> c) -> f (b -> d) -> f (Etiher a b) -> f (Either c d)
+(|||)  :: f (a -> c) -> f (b -> d) -> f (Either a b -> Either c d)
+```
+
+`(|||)` with `(<*>)` gives you `branch`, but no way back possible.
+
+#### Every `ArrowChoice` can give you a `Selective`, but not the reverse :/
+
+---
+
+# Case of `funflow`
+
+One of most important functions:
+	
+```haskell
+step' :: Properties a b -> (a -> b) -> Flow a b
+```	
+
+Generalization of `arr` function
+
+Could have been:
+
+```haskell
+step' :: Properties a b -> (a -> b) -> AppFlow (a -> b)
+```
+
+(thus generalizing `pure`)	
+
+But what about:
+
+```haskell
+stepIO' :: Properties a b -> (a -> IO b) -> Flow a b
+```
+
+No way to return a `f (a -> b)` from a `(a -> m b)`!!
+	
+    </textarea>
+    <script src="https://remarkjs.com/downloads/remark-latest.min.js">
+    </script>
+    <script>
+      var slideshow = remark.create();
+    </script>
+  </body>
+</html>
