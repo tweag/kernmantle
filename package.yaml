@@ -36,7 +36,13 @@ executables:
     main: examples/Ex1.hs
     dependencies:
       - kernmantle
+  exBuilder:
+    main: examples/ExBuilder.hs
+    dependencies:
+      - kernmantle
   exCli:
     main: examples/ExCli.hs
     dependencies:
       - kernmantle
+      - optparse-applicative
+      - profunctors
