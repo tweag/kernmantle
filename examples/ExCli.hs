@@ -4,6 +4,7 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE FlexibleContexts #-}
 
 
 -- | In this example, we show how to make an effect that can expose options it
@@ -19,6 +20,8 @@ import Data.Functor.Compose
 import Data.Profunctor.Cayley
 import Options.Applicative
 import Data.Char (toUpper)
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BS8
 
 
 data a `GetOpt` b where
@@ -27,44 +30,70 @@ data a `GetOpt` b where
          -> Maybe String  -- ^ Default value
          -> GetOpt a String  -- ^ Returns final value
 
-type a ~~> b =
-  AnyRopeWith '[ '("options1", GetOpt), '("options2", GetOpt) ] '[Arrow] a b
--- We use two strands of effects for options, just for the sake of showing they
--- can be merged and interpreted at the same time
+data a `FileAccess` b where
+  ReadFile :: String  -- ^ File name
+           -> FileAccess a BS.ByteString
+  WriteFile :: String  -- ^ File name
+            -> FileAccess BS.ByteString ()
 
-pipeline :: () ~~> String
+type a ~~> b =
+  AnyRopeWith '[ '("options", GetOpt)
+               , '("files", FileAccess) ]
+              '[Arrow] a b
+
+pipeline :: () ~~> ()
 pipeline = proc () -> do
-  name <- strand #options1 (GetOpt "name" "The user's name" $ Just "Yves") -< ()
-  lastname <- strand #options1 (GetOpt "lastname" "The user's last name" $ Just "Parès") -< ()
-  age <- strand #options2 (GetOpt "age" "The user's age" Nothing) -< ()
+  name     <- getOpt "name" "The user's name" $ Just "Yves" -< ()
+  lastname <- getOpt "lastname" "The user's last name" $ Just "Pares" -< ()
+  age      <- getOpt "age" "The user's age" Nothing -< ()
     -- This demonstrates early failure: if age isn't given, this pipeline won't
     -- even start
-  returnA -< "Your name is " ++ name ++ " " ++ lastname ++ " and you are " ++ age ++ "."
+  cnt <- strand #files (ReadFile "user") -< ()
+  let summary = "Your name is " ++ name ++ " " ++ lastname ++
+                " and you are " ++ age ++ ".\n"
+  strand #files (WriteFile "summary") -< BS8.pack summary <> cnt
+  where
+    getOpt n d v = strand #options $ GetOpt n d v
 
 -- | The core effect we need to collect all our options and build the
 -- corresponding CLI Parser. What we should really run once our strands of
--- effects have been evaluated.  Note that @CoreEff a b = Parser (a -> b)@
-type CoreEff = Cayley Parser (->)
+-- effects have been evaluated.  Note that @CoreEff a b = Parser (a -> IO b)@
+type CoreEff = Cayley Parser (Kleisli IO)
 
 -- | Turns a GetOpt into an actual optparse-applicative Parser
-interpretGetOpt :: String -> GetOpt a b -> CoreEff a b
-interpretGetOpt docPrefix (GetOpt name docstring defVal) = Cayley $ const <$>
+interpretGetOpt :: GetOpt a b -> CoreEff a b
+interpretGetOpt (GetOpt name docstring defVal) =
+  Cayley $ Kleisli . const . return <$>
   let (docSuffix, defValField) = case defVal of
         Just v -> (". Default: "<>v, value v)
         Nothing -> ("", mempty)
-  in strOption ( long name <> help (docPrefix<>docstring<>docSuffix) <>
+  in strOption ( long name <> help (docstring<>docSuffix) <>
                  metavar (map toUpper name) <> defValField )
 
--- | We remove all the strands of effects and get down to the core effect:
-interpretedPipeline :: CoreEff () String
-interpretedPipeline =
-  pipeline & entwine #options1 (asCore . interpretGetOpt "From options1: ")
-           & entwine #options2 (asCore . interpretGetOpt "From options2: ")
-           & untwine
+-- | An option string to get a filepath
+fpParser :: String -> String -> Parser String
+fpParser fname prefix = strOption
+  ( long (prefix<>fname) <> help ("File bound to "<>fname<>". Default: "<>def)
+    <> metavar "PATH" <> value def )
+  where def = fname<>".txt"
+
+-- | Turns a FileAccess into an option that requests a real filepath, and
+-- performs the access (doesn't support accessing twice the same file for now)
+interpretFileAccess :: FileAccess a b -> CoreEff a b
+interpretFileAccess (ReadFile name) = Cayley $ f <$> fpParser name "read-"
+  where f realPath = Kleisli $ const $ BS.readFile realPath
+interpretFileAccess (WriteFile name) = Cayley $ f <$> fpParser name "write-"
+  where f realPath = Kleisli $ BS.writeFile realPath
 
 main :: IO ()
 main = do
-  runPipeline <- execParser $ info (helper <*> runCayley interpretedPipeline) $
+  Kleisli runPipeline <- execParser $ info (helper <*> interpretedPipeline) $
        header "A simple kernmantle pipeline"
     <> progDesc "Doesn't do much, but cares about you"
-  putStrLn $ runPipeline ()
+  runPipeline ()
+  where
+    Cayley interpretedPipeline =
+      pipeline & loosen
+               & entwine #options (asCore . interpretGetOpt)
+               & entwine #files   (asCore . interpretFileAccess)
+               & untwine
