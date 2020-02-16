@@ -47,3 +47,14 @@ executables:
       - optparse-applicative
       - profunctors
       - bytestring
+  exCaching:
+    main: examples/ExCaching.hs
+    dependencies:
+      - kernmantle
+      - cas-hashable
+      - cas-store
+      - optparse-applicative
+      - profunctors
+      - bytestring
+      - path
+      - path-io

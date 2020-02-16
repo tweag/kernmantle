@@ -37,6 +37,11 @@ packages:
 extra-deps:
 - git: https://github.com/ekmett/bifunctors.git
   commit: acd1866f8ddad7991ae31d5c66740fc697fef92b
+- git: https://github.com/tweag/funflow.git
+  commit: f10ee7ded42e4f4031d02958dbdbbd95f46791e3
+  subdirs:
+    - cas-hashable
+    - cas-store
 
 # - acme-missiles-0.3
 # - git: https://github.com/commercialhaskell/stack.git
