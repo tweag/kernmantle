@@ -37,6 +37,7 @@ module Control.Kernmantle.Rope
   , Entwines, SatisfiesAll
   , Label, fromLabel
   , Sieve(..), ToSieve
+  , SieveTrans (..), HasKleisli, HasMonadIO
   , type (:->)
   , (&)
 
@@ -48,6 +49,7 @@ module Control.Kernmantle.Rope
   , mergeStrands
   , asCore
   , toSieve, toSieve_
+  , liftKleisli, liftStar, liftKleisliIO
 
   , onEachEffFunctor
   , entwineEffFunctors
@@ -62,6 +64,7 @@ import Data.Bifunctor.Tannen
 import Data.Function ((&))
 import Data.Profunctor hiding (rmap)
 import Data.Profunctor.Sieve
+import Data.Profunctor.SieveTrans
 import Data.Vinyl hiding ((<+>))
 import Data.Vinyl.ARec
 import Data.Vinyl.Functor
@@ -88,6 +91,7 @@ newtype Rope (record::RopeRec) (mantle::[Strand]) (core::BinEff) a b =
            , Closed, Costrong, Cochoice
            , ThrowEffect ex, TryEffect ex
            , Profunctor, Strong, Choice
+           , SieveTrans sieve
            )
 
 runRope :: Rope record mantle core a b -> record (Weaver core) mantle -> core a b

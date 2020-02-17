@@ -20,6 +20,7 @@ import Data.Biapplicative
 import Data.Bifunctor.Tannen
 import Data.Functor.Identity
 import Data.Profunctor.Cayley
+import Data.Profunctor.SieveTrans
 import Data.Vinyl hiding ((<+>))
 import Data.Vinyl.TypeLevel
 import GHC.TypeLits
@@ -81,7 +82,7 @@ newtype RopeRunner (record::RopeRec) (mantle::[Strand]) (interp::BinEff) (core::
   deriving (EffFunctor, EffPointedFunctor)
     via Tannen ((->) (record (Weaver interp) mantle))
 
-  deriving (Profunctor, Strong, Choice)
+  deriving (Profunctor, Strong, Choice, SieveTrans sieve)
     via Cayley ((->) (record (Weaver interp) mantle)) core
 
 instance (RMap m) => EffProfunctor (RopeRunner Rec m) where

@@ -17,6 +17,7 @@ import Prelude hiding (id, (.))
 import Control.Kernmantle.Rope
 import Control.Arrow
 import Control.Category
+import Control.Monad.IO.Class
 import Data.CAS.ContentStore
 import qualified Data.CAS.RemoteCache as Remote
 import Data.Functor.Compose
@@ -43,11 +44,11 @@ data a `FileAccess` b where
 data a `Cached` b where
   CachedOp  :: Cacher a b -> (a -> IO b) -> Cached a b
 
-type a ~~> b =
+type a ~~> b = forall m. (MonadIO m) =>
   AnyRopeWith '[ '("options", GetOpt)
                , '("files", FileAccess)
                , '("cached", Cached) ]
-              '[Arrow] a b
+              '[Arrow, HasKleisli m] a b
 
 pipeline :: () ~~> ()
 pipeline = proc () -> do
@@ -59,20 +60,23 @@ pipeline = proc () -> do
   cnt <- strand #files (ReadFile "user") -< ()
   let summary = "Your name is " ++ name ++ " " ++ lastname ++
                 " and you are " ++ age ++ ".\n"
+  liftKleisliIO id -< putStrLn $ "Gonna write summary: "<>summary
   strand #files (WriteFile "summary") -< BS8.pack summary <> cnt
-  strand #cached (CachedOp (defaultCacherWithIdent 1) $ putStrLn) -< "Wrote summary file"
+  strand #cached (CachedOp (defaultCacherWithIdent 1) putStrLn) -< "Wrote summary file"
   where
     getOpt n d v = strand #options $ GetOpt n d v
 
 -- | The core effect we need to collect all our options and build the
 -- corresponding CLI Parser. What we should really run once our strands of
--- effects have been evaluated.  Note that @CoreEff a b = Parser (a -> IO b)@
-type CoreEff = Cayley Parser (Kleisli IO)
+-- effects have been evaluated. It can be pretty general, as long as in the
+-- bottom it allows us to access some IO monad. Note that @CoreEff a b = Parser
+-- (a -> IO b)@ if eff is just @Kleisli IO@
+type CoreEff a b = forall eff m. (HasMonadIO eff m) => Cayley Parser eff a b
 
 -- | Turns a GetOpt into an actual optparse-applicative Parser
 interpretGetOpt :: GetOpt a b -> CoreEff a b
 interpretGetOpt (GetOpt name docstring defVal) =
-  Cayley $ Kleisli . const . return <$>
+  Cayley $ liftKleisliIO . const . return <$>
   let (docSuffix, defValField) = case defVal of
         Just v -> (". Default: "<>v, value v)
         Nothing -> ("", mempty)
@@ -90,14 +94,13 @@ fpParser fname prefix = strOption
 -- performs the access (doesn't support accessing twice the same file for now)
 interpretFileAccess :: FileAccess a b -> CoreEff a b
 interpretFileAccess (ReadFile name) = Cayley $ f <$> fpParser name "read-"
-  where f realPath = Kleisli $ const $ BS.readFile realPath
+  where f realPath = liftKleisliIO $ const $ BS.readFile realPath
 interpretFileAccess (WriteFile name) = Cayley $ f <$> fpParser name "write-"
-  where f realPath = Kleisli $ BS.writeFile realPath
+  where f realPath = liftKleisliIO $ BS.writeFile realPath
 
 interpretCached :: ContentStore -> Cached a b -> CoreEff a b
-interpretCached store (CachedOp cacher f) = Cayley $ pure $ Kleisli $
-  cacheKleisliIO (Just 1) cacher Remote.NoCache
-                 store f
+interpretCached store (CachedOp cacher f) = liftKleisliIO $
+  cacheKleisliIO (Just 1) cacher Remote.NoCache store f
 
 main :: IO ()
 main =
