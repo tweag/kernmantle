@@ -50,7 +50,8 @@ module Control.Kernmantle.Rope
   , mergeStrands
   , asCore
   , toSieve, toSieve_
-  , liftKleisli, liftStar, liftKleisliIO
+  , liftKleisli, liftKleisliIO
+  , mapKleisli
 
   , onEachEffFunctor
   , entwineEffFunctors

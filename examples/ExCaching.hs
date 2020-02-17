@@ -105,9 +105,9 @@ interpretFileAccess (ReadFile name) = Cayley $ f <$> fpParser name "read-"
 interpretFileAccess (WriteFile name) = Cayley $ f <$> fpParser name "write-"
   where f realPath = liftKleisliIO $ BS.writeFile realPath
 
-interpretCached store toCore (CachedOp cacher f) = Cayley $
-  Kleisli . cacheKleisliIO (Just 1) cacher Remote.NoCache store . runKleisli <$> f'
-  where Cayley f' = toCore f
+interpretCached store toCore (CachedOp cacher f) =
+  mapKleisli (cacheKleisliIO (Just 1) cacher Remote.NoCache store) $
+    toCore $ loosen f
 
 main :: IO ()
 main =
