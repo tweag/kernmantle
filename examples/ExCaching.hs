@@ -41,14 +41,25 @@ data a `FileAccess` b where
   WriteFile :: String  -- ^ File name
             -> FileAccess BS.ByteString ()
 
-data a `Cached` b where
-  CachedOp  :: Cacher a b -> (a -> IO b) -> Cached a b
+data Cached a b where
+  CachedOp  :: Cacher a b -> (a ~~> b) -> Cached a b
 
 type a ~~> b = forall m. (MonadIO m) =>
   AnyRopeWith '[ '("options", GetOpt)
                , '("files", FileAccess)
                , '("cached", Cached) ]
               '[Arrow, HasKleisli m] a b
+
+
+-- | Some dummy computation that will be cached
+computation :: (String, String, String, BS.ByteString) ~~> ()
+computation = proc (name, lastname, age, cnt) -> do
+  let summary = "Your name is " ++ name ++ " " ++ lastname ++
+                " and you are " ++ age ++ ".\n"
+  liftKleisliIO id -< putStrLn $ "Gonna write this summary: "<>summary
+  strand #files (WriteFile "summary") -< BS8.pack summary <> cnt
+  liftKleisliIO id -< putStrLn $
+    "I wrote the summary file. I won't do it a second time if you re-execute with the same parameters"
 
 pipeline :: () ~~> ()
 pipeline = proc () -> do
@@ -58,14 +69,10 @@ pipeline = proc () -> do
     -- This demonstrates early failure: if age isn't given, this pipeline won't
     -- even start
   cnt <- strand #files (ReadFile "user") -< ()
-  let summary = "Your name is " ++ name ++ " " ++ lastname ++
-                " and you are " ++ age ++ ".\n"
-  liftKleisliIO id -< putStrLn $ "Gonna write summary: "<>summary
-  strand #files (WriteFile "summary") -< BS8.pack summary <> cnt
-  strand #cached (CachedOp (defaultCacherWithIdent 1) putStrLn) -< "Wrote summary file"
+  strand #cached (CachedOp (defaultCacherWithIdent 1) computation) -< (name, lastname, age, cnt)
   where
     getOpt n d v = strand #options $ GetOpt n d v
-
+    
 -- | The core effect we need to collect all our options and build the
 -- corresponding CLI Parser. What we should really run once our strands of
 -- effects have been evaluated. It can be pretty general, as long as in the
@@ -98,18 +105,18 @@ interpretFileAccess (ReadFile name) = Cayley $ f <$> fpParser name "read-"
 interpretFileAccess (WriteFile name) = Cayley $ f <$> fpParser name "write-"
   where f realPath = liftKleisliIO $ BS.writeFile realPath
 
-interpretCached :: ContentStore -> Cached a b -> CoreEff a b
-interpretCached store (CachedOp cacher f) = liftKleisliIO $
-  cacheKleisliIO (Just 1) cacher Remote.NoCache store f
+interpretCached store toCore (CachedOp cacher f) = Cayley $
+  Kleisli . cacheKleisliIO (Just 1) cacher Remote.NoCache store . runKleisli <$> f'
+  where Cayley f' = toCore f
 
 main :: IO ()
 main =
   withStore [absdir|/home/yves/_store|] $ \store -> do
     let Cayley interpretedPipeline =
           pipeline & loosen
-               & entwine #options (asCore . interpretGetOpt)
-               & entwine #files   (asCore . interpretFileAccess)
-               & entwine #cached  (asCore . interpretCached store)
+               & entwineRec #cached  (interpretCached store)
+               & entwine    #options (asCore . interpretGetOpt)
+               & entwine    #files   (asCore . interpretFileAccess)
                & untwine
     Kleisli runPipeline <- execParser $ info (helper <*> interpretedPipeline) $
          header "A simple kernmantle pipeline"

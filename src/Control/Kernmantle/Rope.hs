@@ -43,6 +43,7 @@ module Control.Kernmantle.Rope
 
   , tighten, loosen
   , entwine
+  , entwineRec
   , retwine
   , untwine
   , runSieveCore
@@ -168,6 +169,21 @@ entwine :: Label name  -- ^ Give a name to the strand
 entwine _ run rope = mkRope $ \r ->
   runRope rope (Weaver (\eff -> runRope (run eff) r) :& r)
 {-# INLINE entwine #-}
+
+entwineRec
+  :: forall name binEff mantle core.
+     Label name  -- ^ Give a name to the strand
+  -> ((LooseRope ('(name,binEff) ': mantle) core :-> core)
+      -> binEff :-> core) -- ^ The execution function
+  -> LooseRope ('(name,binEff) ': mantle) core
+  :-> LooseRope mantle core -- ^ The 'Rope' with the extra effect strand,
+                            -- transformed into the same Rope but with that
+                            -- effect woven in the core
+entwineRec _ run rope = mkRope $ \r ->
+  let runThatRope :: LooseRope ('(name,binEff) ': mantle) core :-> core
+      runThatRope rope' =
+        runRope rope' (Weaver (\eff -> run runThatRope eff) :& r)
+  in runThatRope rope
 
 -- | Runs an effect directly in the core. You should use that function only as
 -- part of a call to 'entwine'.
