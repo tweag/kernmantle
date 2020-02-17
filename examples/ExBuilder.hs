@@ -120,11 +120,11 @@ main = do
          (\f -> runEffBuilder f vl)
              -- First, how to run the builder effect, which is a pure function,
              -- by giving it the verbosity level read from CLI
-         ( entwine_ #logger ( runBypassWith (toSieve . runLogger)) )
+         ( entwine_ #logger ( runBypassWith (Kleisli . runLogger)) )
              -- Then, how to run the effects that were wrapped in this builder
              -- effect
-         ( entwine_ #console (toSieve . runConsole)
-         . entwine_ #file (toSieve . runFile) )
+         ( entwine_ #console (Kleisli . runConsole)
+         . entwine_ #file (Kleisli . runFile) )
              -- And finally, how to run all the other effects that were _not_
              -- wrapped
        & runSieveCore "You"

@@ -36,7 +36,6 @@ module Control.Kernmantle.Rope
   , AnyRopeWith
   , Entwines, SatisfiesAll
   , Label, fromLabel
-  , Sieve(..), ToSieve
   , SieveTrans (..), HasKleisli, HasMonadIO
   , type (:->)
   , (&)
@@ -48,7 +47,6 @@ module Control.Kernmantle.Rope
   , untwine
   , runSieveCore
   , mergeStrands
-  , toSieve, toSieve_
   , liftKleisli, liftKleisliIO
   , mapKleisli
 
@@ -171,10 +169,10 @@ entwine
   :-> LooseRope mantle core -- ^ The 'Rope' with the extra effect strand,
                             -- transformed into the same Rope but with that
                             -- effect woven in the core
-entwine _ run rope = mkRope $ \r ->
+entwine _ interpFn rope = mkRope $ \r ->
   let runThatRope :: LooseRope ('(name,binEff) ': mantle) core :-> core
       runThatRope rope' =
-        runRope rope' (Weaver (\eff -> run runThatRope eff) :& r)
+        runRope rope' (Weaver (\eff -> interpFn runThatRope eff) :& r)
   in runThatRope rope
 
 -- | A version of 'entwine' when the strand can be directly interpreted in the
@@ -187,7 +185,7 @@ entwine_
   :-> LooseRope mantle core -- ^ The 'Rope' with the extra effect strand,
                             -- transformed into the same Rope but with that
                             -- effect woven in the core
-entwine_ lbl run = entwine lbl (const run)
+entwine_ lbl interpFn = entwine lbl (const interpFn)
 {-# INLINE entwine_ #-}
 
 -- | Reorders the strands to match some external context. @strands'@ can contain

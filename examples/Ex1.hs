@@ -35,13 +35,13 @@ runFile cmd inp = case cmd of
 
 -- | Just to show the type of runFile once we lift it as part of the 'Rope'
 interpFile :: a `File` b
-           -> AnyRopeWith '[ '("io", ToSieve IO) ] '[] a b
+           -> AnyRopeWith '[ '("io", Kleisli IO) ] '[] a b
               -- We give our list of requirements. Interpreting File effects
-              -- will require an #io Strand to put the IO actions in. A "Sieve"
-              -- is a binary effect constructed from a monadic effect, it's the
+              -- will require an #io Strand to put the IO actions in. Kleisli is
+              -- a binary effect constructed from a monadic effect, it's the
               -- prime way to lift IO actions in the Rope. No requirements are
               -- placed on the core.
-interpFile = strand #io . toSieve . runFile
+interpFile = strand #io . Kleisli . runFile
 
 -- | Just a shortcut to say our program can run in any rope that supports our
 -- effects and whose core implements ArrowChoice and allows us to catch
@@ -80,7 +80,7 @@ main = prog -- Rope ARec '[("warnConsole",Console),("console",Console),("file",F
                -- redirect it to #console
             -- Rope Rec '[("console",Console),("file",File),("io",Kleisli IO)] (Kleisli IO) String ()
             & entwine #console (\runRope consoleEff ->
-                runRope $ loosen $ strand #io $ toSieve $ runConsole consoleEff)
+                runRope $ loosen $ strand #io $ Kleisli $ runConsole consoleEff)
                -- runConsole result just runs in IO. So we ask for a new #io
                -- strand to hold the interpreted console effects...
             -- Rope Rec '[("file",File),("io",Kleisli IO)] (Kleisli IO) String ()
@@ -100,6 +100,6 @@ main = prog -- Rope ARec '[("warnConsole",Console),("console",Console),("file",F
 altMain :: IO ()
 altMain = prog & loosen
                & mergeStrands #console #warnConsole
-               & entwine_ #console (toSieve . runConsole)
-               & entwine_ #file    (toSieve . runFile)
+               & entwine_ #console (Kleisli . runConsole)
+               & entwine_ #file    (Kleisli . runFile)
                & runSieveCore "You"
