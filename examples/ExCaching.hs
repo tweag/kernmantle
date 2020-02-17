@@ -18,7 +18,7 @@ import Control.Kernmantle.Rope
 import Control.Arrow
 import Control.Category
 import Control.Monad.IO.Class
-import Data.CAS.ContentStore
+import qualified Data.CAS.ContentStore as CS
 import qualified Data.CAS.RemoteCache as Remote
 import Data.Functor.Compose
 import Data.Profunctor.Cayley
@@ -29,21 +29,27 @@ import qualified Data.ByteString.Char8 as BS8
 import Path
 
 
+-- | An effect to ask for some parameter's value
 data a `GetOpt` b where
   GetOpt :: String  -- ^ Name
          -> String  -- ^ Docstring
          -> Maybe String  -- ^ Default value
          -> GetOpt a String  -- ^ Returns final value
 
+-- | An effect to read or write a file
 data a `FileAccess` b where
   ReadFile :: String  -- ^ File name
            -> FileAccess a BS.ByteString
   WriteFile :: String  -- ^ File name
             -> FileAccess BS.ByteString ()
 
+-- | An effect to cache part of the pipeline
 data Cached a b where
-  CachedOp  :: Cacher a b -> (a ~~> b) -> Cached a b
+  CachedOp  :: CS.Cacher a b -> (a ~~> b) -> Cached a b
 
+-- | The pipeline type that we will use. It collects some effects we need. Note
+-- this is actually a polymorphic type, it requires the listed effects, but
+-- could accept more, and the order doesn't matter.
 type a ~~> b = forall m. (MonadIO m) =>
   AnyRopeWith '[ '("options", GetOpt)
                , '("files", FileAccess)
@@ -58,18 +64,26 @@ computation = proc (name, lastname, age, cnt) -> do
                 " and you are " ++ age ++ ".\n"
   liftKleisliIO id -< putStrLn $ "Gonna write this summary: "<>summary
   strand #files (WriteFile "summary") -< BS8.pack summary <> cnt
-  liftKleisliIO id -< putStrLn $
-    "I wrote the summary file. I won't do it a second time if you re-execute with the same parameters"
+  printStuff <- strand #options
+    (GetOpt "print-stuff" "Whether to print stuff after writing the summary" $ Just "yes") -< ()
+  -- This option is retrieved from inside the cached computation, so it won't be
+  -- taken into account when determining whether it should be reexecuted
+  liftKleisliIO id -< if head printStuff == 'y'
+    then putStrLn $
+      "I wrote the summary file. I won't do it a second time if you re-execute with the same parameters"
+    else return ()
 
+-- | The full pipeline of effects to execute
 pipeline :: () ~~> ()
 pipeline = proc () -> do
   name     <- getOpt "name" "The user's name" $ Just "Yves" -< ()
   lastname <- getOpt "lastname" "The user's last name" $ Just "Pares" -< ()
   age      <- getOpt "age" "The user's age" Nothing -< ()
     -- This demonstrates early failure: if age isn't given, this pipeline won't
-    -- even start
+    -- even start as the cli Parser will fail
   cnt <- strand #files (ReadFile "user") -< ()
-  strand #cached (CachedOp (defaultCacherWithIdent 1) computation) -< (name, lastname, age, cnt)
+  strand #cached (CachedOp (CS.defaultCacherWithIdent 1) computation)
+      -< (name, lastname, age, cnt)
   where
     getOpt n d v = strand #options $ GetOpt n d v
     
@@ -106,19 +120,22 @@ interpretFileAccess (WriteFile name) = Cayley $ f <$> fpParser name "write-"
   where f realPath = liftKleisliIO $ BS.writeFile realPath
 
 interpretCached store runRope (CachedOp cacher f) =
-  mapKleisli (cacheKleisliIO (Just 1) cacher Remote.NoCache store) $
+  mapKleisli (CS.cacheKleisliIO (Just 1) cacher Remote.NoCache store) $
     runRope $ loosen f
 
 main :: IO ()
 main =
-  withStore [absdir|/home/yves/_store|] $ \store -> do
-    let Cayley interpretedPipeline =
+  CS.withStore [absdir|/home/yves/_store|] $ \store -> do
+    let Cayley pipelineParser =
           pipeline & loosen
-               & entwine  #cached  (interpretCached store)
-               & entwine_ #options interpretGetOpt
-               & entwine_ #files   interpretFileAccess
-               & untwine
-    Kleisli runPipeline <- execParser $ info (helper <*> interpretedPipeline) $
+              -- Order matters here: since interpretCached needs to run the full
+              -- rope (as each 'Cached' computation must be able to access all
+              -- the other effects), its entwine call must be the first:
+            & entwine  #cached  (interpretCached store)
+            & entwine_ #options interpretGetOpt
+            & entwine_ #files   interpretFileAccess
+            & untwine
+    Kleisli runPipeline <- execParser $ info (helper <*> pipelineParser) $
          header "A kernmantle pipeline with caching"
       <> progDesc "Doesn't do _that_ much more than exCli"
     runPipeline ()
