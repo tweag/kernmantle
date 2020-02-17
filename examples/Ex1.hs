@@ -79,15 +79,16 @@ main = prog -- Rope ARec '[("warnConsole",Console),("console",Console),("file",F
                -- We used a second Console effect for warnings in prog. We
                -- redirect it to #console
             -- Rope Rec '[("console",Console),("file",File),("io",Kleisli IO)] (Kleisli IO) String ()
-            & entwine #console (strand #io . toSieve . runConsole)
+            & entwine #console (\runRope consoleEff ->
+                runRope $ loosen $ strand #io $ toSieve $ runConsole consoleEff)
                -- runConsole result just runs in IO. So we ask for a new #io
                -- strand to hold the interpreted console effects...
             -- Rope Rec '[("file",File),("io",Kleisli IO)] (Kleisli IO) String ()
-            & entwine #file interpFile
+            & entwine #file (\runRope -> runRope . loosen . interpFile)
                -- ...that #io strand will be reused by the interpreted File
                -- effects...
             -- Rope Rec '[("io",Kleisli IO)] (Kleisli IO) String ()
-            & entwine #io asCore
+            & entwine_ #io id
                -- ...then set this #io strand to be directly interpreted in the
                -- core...
             -- Rope Rec '[] (Kleisli IO) String ()
@@ -99,6 +100,6 @@ main = prog -- Rope ARec '[("warnConsole",Console),("console",Console),("file",F
 altMain :: IO ()
 altMain = prog & loosen
                & mergeStrands #console #warnConsole
-               & entwine #console (asCore . toSieve . runConsole)
-               & entwine #file (asCore . toSieve . runFile)
+               & entwine_ #console (toSieve . runConsole)
+               & entwine_ #file    (toSieve . runFile)
                & runSieveCore "You"

@@ -6,6 +6,9 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE RankNTypes #-}
 
+-- BEWARE! THIS EXAMPLE IS DEPRECATED, IT WILL MOST LIKELY BE REMOVED IN THE
+-- NEAR FUTURE.
+
 -- | In this example, we show how to condition some strand based on a _builder_
 -- effect (here just accessing some config value) that will create our strands.
 
@@ -117,11 +120,11 @@ main = do
          (\f -> runEffBuilder f vl)
              -- First, how to run the builder effect, which is a pure function,
              -- by giving it the verbosity level read from CLI
-         ( entwine #logger (asCore . runBypassWith (toSieve . runLogger)) )
+         ( entwine_ #logger ( runBypassWith (toSieve . runLogger)) )
              -- Then, how to run the effects that were wrapped in this builder
              -- effect
-         ( entwine #console (asCore . toSieve . runConsole)
-         . entwine #file (asCore . toSieve . runFile) )
+         ( entwine_ #console (toSieve . runConsole)
+         . entwine_ #file (toSieve . runFile) )
              -- And finally, how to run all the other effects that were _not_
              -- wrapped
        & runSieveCore "You"

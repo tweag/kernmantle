@@ -105,20 +105,20 @@ interpretFileAccess (ReadFile name) = Cayley $ f <$> fpParser name "read-"
 interpretFileAccess (WriteFile name) = Cayley $ f <$> fpParser name "write-"
   where f realPath = liftKleisliIO $ BS.writeFile realPath
 
-interpretCached store toCore (CachedOp cacher f) =
+interpretCached store runRope (CachedOp cacher f) =
   mapKleisli (cacheKleisliIO (Just 1) cacher Remote.NoCache store) $
-    toCore $ loosen f
+    runRope $ loosen f
 
 main :: IO ()
 main =
   withStore [absdir|/home/yves/_store|] $ \store -> do
     let Cayley interpretedPipeline =
           pipeline & loosen
-               & entwineRec #cached  (interpretCached store)
-               & entwine    #options (asCore . interpretGetOpt)
-               & entwine    #files   (asCore . interpretFileAccess)
+               & entwine  #cached  (interpretCached store)
+               & entwine_ #options interpretGetOpt
+               & entwine_ #files   interpretFileAccess
                & untwine
     Kleisli runPipeline <- execParser $ info (helper <*> interpretedPipeline) $
-         header "A simple kernmantle pipeline"
-      <> progDesc "Doesn't do much, but cares about you"
+         header "A kernmantle pipeline with caching"
+      <> progDesc "Doesn't do _that_ much more than exCli"
     runPipeline ()

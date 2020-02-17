@@ -94,6 +94,6 @@ main = do
   where
     Cayley interpretedPipeline =
       pipeline & loosen
-               & entwine #options (asCore . interpretGetOpt)
-               & entwine #files   (asCore . interpretFileAccess)
+               & entwine_ #options interpretGetOpt
+               & entwine_ #files   interpretFileAccess
                & untwine

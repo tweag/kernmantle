@@ -43,12 +43,11 @@ module Control.Kernmantle.Rope
 
   , tighten, loosen
   , entwine
-  , entwineRec
+  , entwine_
   , retwine
   , untwine
   , runSieveCore
   , mergeStrands
-  , asCore
   , toSieve, toSieve_
   , liftKleisli, liftKleisliIO
   , mapKleisli
@@ -153,44 +152,43 @@ loosen :: (NatToInt (RLength m))
 loosen r = mkRope $ runRope r . toARec
 {-# INLINE loosen #-}
 
--- | Adds a new effect strand in the 'Rope'. Users of that function should
--- normally not place constraints on the core or instanciate it. Rather,
--- requirement of the execution function should be expressed in terms of other
--- effects of the @mantle@.
+-- | Adds a new effect strand in the 'Rope' by decribing how to interpret that
+-- in the core. The interpretation function is fed the fixpoint of all
+-- interpretation functions, meaning the interpretation function can itself use
+-- effects in the 'Rope'.
 --
 -- @(a :-> b)@ is the type function from an effect @a@ to an effect @b@
 -- preserving the input/output type params of these effects. It allows us to
 -- elude the two type parameters of these effects, but these are still here.
-entwine :: Label name  -- ^ Give a name to the strand
-        -> (binEff :-> LooseRope mantle core) -- ^ The execution function
-        -> LooseRope ('(name,binEff) ': mantle) core
-       :-> LooseRope mantle core -- ^ The 'Rope' with the extra effect strand,
-                                 -- transformed into the same Rope but with that
-                                 -- effect woven in the core
-entwine _ run rope = mkRope $ \r ->
-  runRope rope (Weaver (\eff -> runRope (run eff) r) :& r)
-{-# INLINE entwine #-}
-
-entwineRec
+entwine
   :: forall name binEff mantle core.
      Label name  -- ^ Give a name to the strand
-  -> ((LooseRope ('(name,binEff) ': mantle) core :-> core)
-      -> binEff :-> core) -- ^ The execution function
+  -> (    (LooseRope ('(name,binEff) ': mantle) core :-> core)
+      ->  binEff
+      :-> core) -- ^ The execution function, that receives a way to interpret
+                -- any strand in core
   -> LooseRope ('(name,binEff) ': mantle) core
   :-> LooseRope mantle core -- ^ The 'Rope' with the extra effect strand,
                             -- transformed into the same Rope but with that
                             -- effect woven in the core
-entwineRec _ run rope = mkRope $ \r ->
+entwine _ run rope = mkRope $ \r ->
   let runThatRope :: LooseRope ('(name,binEff) ': mantle) core :-> core
       runThatRope rope' =
         runRope rope' (Weaver (\eff -> run runThatRope eff) :& r)
   in runThatRope rope
 
--- | Runs an effect directly in the core. You should use that function only as
--- part of a call to 'entwine'.
-asCore :: core :-> Rope r mantle core
-asCore = mkRope . const
-{-# INLINE asCore #-}
+-- | A version of 'entwine' when the strand can be directly interpreted in the
+-- core with no need to trigger other effects
+entwine_
+  :: forall name binEff mantle core.
+     Label name  -- ^ Give a name to the strand
+  -> (binEff :-> core) -- ^ The execution function
+  -> LooseRope ('(name,binEff) ': mantle) core
+  :-> LooseRope mantle core -- ^ The 'Rope' with the extra effect strand,
+                            -- transformed into the same Rope but with that
+                            -- effect woven in the core
+entwine_ lbl run = entwine lbl (const run)
+{-# INLINE entwine_ #-}
 
 -- | Reorders the strands to match some external context. @strands'@ can contain
 -- more elements than @strands@. Note it works on both 'TightRope's and
