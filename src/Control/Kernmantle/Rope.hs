@@ -39,6 +39,7 @@ module Control.Kernmantle.Rope
   , SieveTrans (..), HasKleisli, HasMonadIO
   , type (:->)
   , (&)
+  , ArrowState (..)
 
   , tighten, loosen
   , entwine
@@ -96,6 +97,10 @@ newtype Rope (record::RopeRec) (mantle::[Strand]) (core::BinEff) a b =
            , Bifunctor, Biapplicative
            )
 
+instance (ArrowState s c) => ArrowState s (Rope r m c) where
+  stateA (Rope rnr) = Rope $ stateA rnr
+
+-- | Just to fix the right kind for the record
 runRope :: Rope record mantle core a b -> record (Weaver core) mantle -> core a b
 runRope (Rope (RopeRunner f)) = f
 {-# INLINE runRope #-}

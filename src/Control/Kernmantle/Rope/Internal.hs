@@ -8,14 +8,20 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE Arrows #-}
 
 module Control.Kernmantle.Rope.Internal where
 
 import Control.Category
 import Control.Arrow
 import Control.Monad.Trans.Reader
+import Control.Monad.State
 import Data.Profunctor hiding (rmap)
-import Data.Bifunctor
 import Data.Biapplicative
 import Data.Bifunctor.Tannen
 import Data.Functor.Identity
@@ -73,7 +79,7 @@ mapWeaverInterp f (Weaver w) = Weaver $ f . w
 -- effect. And then all these interpreted effects will run in a @core@ effect.
 newtype RopeRunner (record::RopeRec) (mantle::[Strand]) (interp::BinEff) (core::BinEff) a b =
   RopeRunner (record (Weaver interp) mantle -> core a b)
-  
+
   deriving ( Category
            , Arrow, ArrowChoice, ArrowLoop, ArrowZero, ArrowPlus
            , Profunctor, Strong, Choice, Closed, Costrong, Cochoice
@@ -84,7 +90,7 @@ newtype RopeRunner (record::RopeRec) (mantle::[Strand]) (interp::BinEff) (core::
   deriving (ProfunctorFunctor, ProfunctorMonad)
     via Cayley ((->) (record (Weaver interp) mantle))
 
-  deriving (Bifunctor, Biapplicative)
+  deriving (Bifunctor, Biapplicative, ArrowState s)
     via Tannen ((->) (record (Weaver interp) mantle)) core
   deriving (EffFunctor, EffPointedFunctor)
     via Tannen ((->) (record (Weaver interp) mantle))
@@ -144,3 +150,35 @@ unwrapSomeStrands :: (EffFunctor f, RMap (MapStrandEffs f mantle1))
 unwrapSomeStrands f g = unwrapRopeRunner . effdimap f g . splitRopeRunner
 {-# INLINE unwrapSomeStrands #-}
 
+--------------------------------------------------------------------------------
+-- State
+
+-- | A class for effects which can pass around a mutable state.
+class Arrow eff => ArrowState s eff | eff -> s where
+  {-# MINIMAL stateA | getA, putA #-}
+  stateA :: eff (a,s) (b,s) -> eff a b
+  stateA eff = proc a -> do
+    s <- getA -< ()
+    (b,s') <- eff -< (a,s)
+    putA -< s'
+    returnA -< b
+
+  getA :: eff () s
+  getA = stateA $ arr (\((),s) -> (s,s))
+
+  putA :: eff s ()
+  putA = stateA $ arr (\(_,s) -> ((),s))
+
+instance (Applicative f, ArrowState s eff) => ArrowState s (Tannen f eff) where
+  stateA (Tannen f) = Tannen $ stateA <$> f
+
+instance (MonadState s m) => ArrowState s (Kleisli m) where
+  stateA (Kleisli f) = Kleisli $ \a -> do
+    s <- get
+    (b,s') <- f (a,s)
+    put s'
+    return b
+
+  getA = Kleisli (const get)
+
+  putA = Kleisli put

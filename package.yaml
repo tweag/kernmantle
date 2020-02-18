@@ -25,6 +25,7 @@ dependencies:
 - profunctors >= 5.5.2 # Needed to have the whole set of Cayley instances
 - comonad
 - vinyl >= 0.11
+- mtl
 - transformers
 - safe-exceptions
 - store
@@ -79,3 +80,8 @@ executables:
       - unordered-containers
       - aeson
       - lens-aeson
+  exState:
+    main: examples/ExState.hs
+    dependencies:
+      - kernmantle
+      - mtl
