@@ -15,22 +15,32 @@
 import Prelude hiding (id, (.), readFile, writeFile)
 
 import Control.Kernmantle.Rope
-import Control.Arrow
-import Control.Category
-import Control.Monad.IO.Class
+  ( AnyRopeWith
+  , HasKleisli (..)
+  , HasMonadIO (..)
+  , entwine
+  , entwine_
+  , untwine
+  , loosen
+  , strand
+  , mapKleisli
+  , liftKleisliIO
+  , (&)
+  )
+import Control.Arrow (Arrow, Kleisli (..))
+import Control.Category (Category (..))
+import Control.Monad.IO.Class (MonadIO (..))
 import qualified Data.CAS.ContentStore as CS
-import Data.CAS.ContentStore
-import Data.CAS.ContentHashable
+import qualified Data.CAS.ContentHashable as CH
 import qualified Data.CAS.RemoteCache as Remote
-import Data.Functor.Compose
-import Data.Functor.Identity
-import Data.Profunctor.Cayley
+import Data.Functor.Identity (Identity (..))
+import Data.Profunctor.Cayley (Cayley (..))
 import Data.Store (Store (..))
 import Options.Applicative
 import Data.Char (toUpper)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
-import Path
+import Path (absdir)
 
 --------------------------------------------------------------------------------
 -- Effect definition
@@ -104,11 +114,11 @@ pipeline = proc () -> do
     -- The constraints over @a@ and @b@ come from the 'defaultCacherWithIdent'
     -- cacher.
     cachedOp ::
-      (ContentHashable Identity a, Store b) =>
+      (CH.ContentHashable Identity a, Store b) =>
       Int -> (a ~~> b) -> (a ~~> b)
     cachedOp n op = strand #cached (CachedOp cacher op)
       where
-        cacher = defaultCacherWithIdent n
+        cacher = CS.defaultCacherWithIdent n
 
     -- Define an operation that will be cached. This operation runs in the same
     -- context as the above pipeline.
