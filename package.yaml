@@ -58,3 +58,17 @@ executables:
       - bytestring
       - path
       - path-io
+  exCaching2:
+    main: examples/ExCaching2.hs
+    dependencies:
+      - kernmantle
+      - cas-hashable
+      - cas-store
+      - optparse-applicative
+      - profunctors
+      - bytestring
+      - path
+      - path-io
+      - mtl
+      - monad-control
+      - exceptions

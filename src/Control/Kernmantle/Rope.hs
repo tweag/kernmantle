@@ -49,6 +49,7 @@ module Control.Kernmantle.Rope
   , mergeStrands
   , liftKleisli, liftKleisliIO
   , mapKleisli
+  , mapRopeCore
 
   , onEachEffFunctor
   , entwineEffFunctors
@@ -100,6 +101,11 @@ runRope (Rope (RopeRunner f)) = f
 mkRope :: (record (Weaver core) mantle -> core a b) -> Rope record mantle core a b
 mkRope = Rope . RopeRunner
 {-# INLINE mkRope #-}
+
+-- | Applies a function on the core action of the Rope
+mapRopeCore :: (core a b -> core a' b') -> Rope r m core a b -> Rope r m core a' b'
+mapRopeCore f rope = mkRope $ f . runRope rope
+{-# INLINE mapRopeCore #-}
 
 -- | A 'Rope' that is "tight", meaning you cannot 'entwine' new 'Strand's to
 -- it. The 'strand' function is @O(1)@ on 'TightRope's whatever the number of
