@@ -27,6 +27,7 @@ dependencies:
 - vinyl >= 0.11
 - transformers
 - safe-exceptions
+- store
 
 library:
   source-dirs: src
