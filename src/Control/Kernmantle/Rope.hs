@@ -65,6 +65,7 @@ import Data.Function ((&))
 import Data.Profunctor hiding (rmap)
 import Data.Profunctor.Sieve
 import Data.Profunctor.SieveTrans
+import Data.Profunctor.Traversing
 import Data.Vinyl hiding ((<+>))
 import Data.Vinyl.ARec
 import Data.Vinyl.Functor
@@ -86,12 +87,13 @@ import Control.Kernmantle.Rope.Internal
 newtype Rope (record::RopeRec) (mantle::[Strand]) (core::BinEff) a b =
   Rope { getRopeRunner :: RopeRunner record mantle core core a b }
 
-  deriving ( Bifunctor, Biapplicative
-           , Category, Arrow, ArrowChoice, ArrowLoop, ArrowZero, ArrowPlus
-           , Closed, Costrong, Cochoice
+  deriving ( Category
+           , Arrow, ArrowChoice, ArrowLoop, ArrowZero, ArrowPlus
+           , Profunctor, Strong, Choice, Closed, Costrong, Cochoice
+           , Mapping, Traversing
            , ThrowEffect ex, TryEffect ex
-           , Profunctor, Strong, Choice
            , SieveTrans sieve
+           , Bifunctor, Biapplicative
            )
 
 runRope :: Rope record mantle core a b -> record (Weaver core) mantle -> core a b
@@ -178,7 +180,7 @@ entwine
 entwine _ interpFn rope = mkRope $ \r ->
   let runThatRope :: LooseRope ('(name,binEff) ': mantle) core :-> core
       runThatRope rope' =
-        runRope rope' (Weaver (\eff -> interpFn runThatRope eff) :& r)
+        runRope rope' (Weaver (interpFn runThatRope) :& r)
   in runThatRope rope
 
 -- | A version of 'entwine' when the strand can be directly interpreted in the

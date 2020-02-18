@@ -20,6 +20,7 @@ import Data.Bifunctor.Functor
 import Data.Bifunctor.Sum
 import Data.Bifunctor.Tannen
 import Data.Profunctor hiding ((:->))
+import Data.Profunctor.Cayley
 import qualified Data.Profunctor as Pro
 
 import Control.Kernmantle.Error
@@ -74,17 +75,16 @@ class (forall a. (EffFunctor (p a))) => EffProfunctor p where
 newtype EffBuilder i builder runner a b =
   EffBuilder { runEffBuilder :: builder i (runner a b) }
 
-  deriving ( Bifunctor, Biapplicative
-           , Category, Arrow, ArrowChoice, ArrowLoop, ArrowZero, ArrowPlus
+  deriving ( Category, Arrow, ArrowChoice, ArrowLoop, ArrowZero, ArrowPlus
            , ThrowEffect ex, TryEffect ex
-           )
-    via (Tannen (App.WrappedArrow builder i) runner)
+           , Profunctor, Strong, Choice, Costrong )
+    via (Cayley (App.WrappedArrow builder i) runner)
 
-  deriving (EffFunctor, EffPointedFunctor)
+  deriving ( EffFunctor, EffPointedFunctor )
     via (Tannen (App.WrappedArrow builder i))
 
-  deriving (Profunctor, Strong, Choice, Costrong)
-    via (Pro.WrappedArrow (Tannen (App.WrappedArrow builder i) runner))
+  deriving ( Bifunctor, Biapplicative )
+    via (Tannen (App.WrappedArrow builder i) runner)
 
 instance EffBifunctor (EffBuilder i) where
   efffirst f (EffBuilder eb) = EffBuilder $ f eb

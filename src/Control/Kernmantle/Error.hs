@@ -12,7 +12,7 @@ where
 import Control.Applicative
 import Control.Arrow
 import Control.Exception.Safe
-import Data.Bifunctor.Tannen
+import Data.Profunctor.Cayley
 
   
 -- | A class for binary effects that can possibly throw exceptions
@@ -31,10 +31,10 @@ instance (MonadCatch m, Exception ex) => TryEffect ex (Kleisli m) where
   tryE (Kleisli act) = Kleisli $ try . act
   {-# INLINE tryE #-}
 
-instance (Applicative f, ThrowEffect ex eff) => ThrowEffect ex (f `Tannen` eff) where
-  throwE = Tannen $ pure throwE
+instance (Applicative f, ThrowEffect ex eff) => ThrowEffect ex (f `Cayley` eff) where
+  throwE = Cayley $ pure throwE
   {-# INLINE throwE #-}
 
-instance (Functor f, TryEffect ex eff) => TryEffect ex (f `Tannen` eff) where
-  tryE (Tannen f) = Tannen $ tryE <$> f
+instance (Functor f, TryEffect ex eff) => TryEffect ex (f `Cayley` eff) where
+  tryE (Cayley f) = Cayley $ tryE <$> f
   {-# INLINE tryE #-}

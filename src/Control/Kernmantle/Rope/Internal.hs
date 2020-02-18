@@ -20,6 +20,8 @@ import Data.Biapplicative
 import Data.Bifunctor.Tannen
 import Data.Functor.Identity
 import Data.Profunctor.Cayley
+import Data.Profunctor.Monad
+import Data.Profunctor.Traversing
 import Data.Profunctor.SieveTrans
 import Data.Vinyl hiding ((<+>))
 import Data.Vinyl.TypeLevel
@@ -72,18 +74,20 @@ mapWeaverInterp f (Weaver w) = Weaver $ f . w
 newtype RopeRunner (record::RopeRec) (mantle::[Strand]) (interp::BinEff) (core::BinEff) a b =
   RopeRunner (record (Weaver interp) mantle -> core a b)
   
-  deriving ( Bifunctor, Biapplicative
-           , Category, Arrow, ArrowChoice, ArrowLoop, ArrowZero, ArrowPlus
-           , Closed, Costrong, Cochoice
+  deriving ( Category
+           , Arrow, ArrowChoice, ArrowLoop, ArrowZero, ArrowPlus
+           , Profunctor, Strong, Choice, Closed, Costrong, Cochoice
+           , Mapping, Traversing
            , ThrowEffect ex, TryEffect ex
-           )
-    via Tannen ((->) (record (Weaver interp) mantle)) core
+           , SieveTrans sieve )
+    via Cayley ((->) (record (Weaver interp) mantle)) core
+  deriving (ProfunctorFunctor, ProfunctorMonad)
+    via Cayley ((->) (record (Weaver interp) mantle))
 
+  deriving (Bifunctor, Biapplicative)
+    via Tannen ((->) (record (Weaver interp) mantle)) core
   deriving (EffFunctor, EffPointedFunctor)
     via Tannen ((->) (record (Weaver interp) mantle))
-
-  deriving (Profunctor, Strong, Choice, SieveTrans sieve)
-    via Cayley ((->) (record (Weaver interp) mantle)) core
 
 instance (RMap m) => EffProfunctor (RopeRunner Rec m) where
   effdimap f g (RopeRunner run) = RopeRunner $
