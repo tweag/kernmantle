@@ -12,38 +12,59 @@
 -- wants, then accumulate these options into a regular Parser (from
 -- optparse-applicative) which builds a pipeline.
 
-import Prelude hiding (id, (.))
+import Prelude hiding (id, (.), readFile, writeFile)
 
 import Control.Kernmantle.Rope
-import Control.Arrow
-import Control.Category
-import Control.Monad.IO.Class
+  ( AnyRopeWith
+  , HasKleisli (..)
+  , HasMonadIO (..)
+  , entwine
+  , entwine_
+  , untwine
+  , loosen
+  , strand
+  , mapKleisli
+  , liftKleisliIO
+  , (&)
+  )
+import Control.Arrow (Arrow, Kleisli (..))
+import Control.Category (Category (..))
+import Control.Monad.IO.Class (MonadIO (..))
 import qualified Data.CAS.ContentStore as CS
+import qualified Data.CAS.ContentHashable as CH
 import qualified Data.CAS.RemoteCache as Remote
-import Data.Functor.Compose
-import Data.Profunctor.Cayley
+import Data.Functor.Identity (Identity (..))
+import Data.Profunctor.Cayley (Cayley (..))
+import Data.Store (Store (..))
 import Options.Applicative
 import Data.Char (toUpper)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
-import Path
+import Path (absdir)
 
+--------------------------------------------------------------------------------
+-- Effect definition
 
--- | An effect to ask for some parameter's value
+-- | An effect for parsing command-line options. Note how 'GetOpt' constructs
+-- @GetOpt a String@, without taking any parameter of type @a@, meaning that it
+-- ignores its input. In practice, we pass @()@ as a dummy input to the effect.
 data a `GetOpt` b where
   GetOpt :: String  -- ^ Name
          -> String  -- ^ Docstring
          -> Maybe String  -- ^ Default value
          -> GetOpt a String  -- ^ Returns final value
 
--- | An effect to read or write a file
+-- | An effect for accessing the file-system. Now we have two constructors, one
+-- for reading and another for writing. The @WriteFile@ effect produces no
+-- outputs, as shown by the type of 'FileAccess' it constructs.
 data a `FileAccess` b where
   ReadFile :: String  -- ^ File name
            -> FileAccess a BS.ByteString
   WriteFile :: String  -- ^ File name
             -> FileAccess BS.ByteString ()
 
--- | An effect to cache part of the pipeline
+-- | An effect for optionally adding a cache to operations. The option to
+-- whether to add or not a cache is given by the 'Cacher' argument.
 data Cached a b where
   CachedOp  :: CS.Cacher a b -> (a ~~> b) -> Cached a b
 
@@ -56,40 +77,69 @@ type a ~~> b = forall m. (MonadIO m) =>
                , '("cached", Cached) ]
               '[Arrow, HasKleisli m] a b
 
+--------------------------------------------------------------------------------
+-- Pipeline definition
 
--- | Some dummy computation that will be cached
-computation :: (String, String, String, BS.ByteString) ~~> ()
-computation = proc (name, lastname, age, cnt) -> do
-  let summary = "Your name is " ++ name ++ " " ++ lastname ++
-                " and you are " ++ age ++ ".\n"
-  liftKleisliIO id -< putStrLn $ "Gonna write this summary: "<>summary
-  strand #files (WriteFile "summary") -< BS8.pack summary <> cnt
-  printStuff <- strand #options
-    (GetOpt "print-stuff" "Whether to print stuff after writing the summary" $ Just "yes") -< ()
-  -- This option is retrieved from inside the cached computation, so it won't be
-  -- taken into account when determining whether it should be reexecuted
-  liftKleisliIO id -< if head printStuff == 'y'
-    then putStrLn $
-      "I wrote the summary file. I won't do it a second time if you re-execute with the same parameters"
-    else return ()
-
--- | The full pipeline of effects to execute
+-- | Our example pipeline. As shown by its type, it neither consumes not
+-- produces any value.
 pipeline :: () ~~> ()
 pipeline = proc () -> do
-  name     <- getOpt "name" "The user's name" $ Just "Yves" -< ()
-  lastname <- getOpt "lastname" "The user's last name" $ Just "Pares" -< ()
+  -- Read the options using the @GetOpt@ effect. The "age" parameter also
+  -- demonstrates early failure: if age isn't given, this pipeline won't even
+  -- start.
+  let getOpt n d v = strand #options (GetOpt n d v)
+  name     <- getOpt "name" "The user's name" (Just "Yves") -< ()
+  lastname <- getOpt "lastname" "The user's last name" (Just "Pares") -< ()
   age      <- getOpt "age" "The user's age" Nothing -< ()
-    -- This demonstrates early failure: if age isn't given, this pipeline won't
-    -- even start as the cli Parser will fail
-  cnt <- strand #files (ReadFile "user") -< ()
-  strand #cached (CachedOp (CS.defaultCacherWithIdent 1) computation)
-      -< (name, lastname, age, cnt)
+
+  -- Read the "user" file.
+  cnt <- readFile "user" -< ()
+
+  -- Run the operation with the appropriate caching.
+  cachedOp 1 computation -< (name, lastname, age, cnt)
+
   where
-    getOpt n d v = strand #options $ GetOpt n d v
-    
--- | The core effect we need to collect all our options and build the
--- corresponding CLI Parser. What we should really run once our strands of
--- effects have been evaluated. It can be pretty general, as long as in the
+    -- Notice how the label "options" matches the one defined in the @~~>@ type.
+    getOpt :: String -> String -> Maybe String -> (a ~~> String)
+    getOpt n d v = strand #options (GetOpt n d v)
+
+    -- Notice how the label "files" matches the one defined in the @~~>@ type.
+    readFile :: String -> (a ~~> BS.ByteString)
+    readFile name = strand #files (ReadFile name)
+
+    writeFile :: String -> (BS.ByteString ~~> ())
+    writeFile name = strand #files (WriteFile name)
+
+    -- Notice how the label "cached" matches the one defined in the @~~>@ type.
+    -- The constraints over @a@ and @b@ come from the 'defaultCacherWithIdent'
+    -- cacher.
+    cachedOp ::
+      (CH.ContentHashable Identity a, Store b) =>
+      Int -> (a ~~> b) -> (a ~~> b)
+    cachedOp n op = strand #cached (CachedOp cacher op)
+      where
+        cacher = CS.defaultCacherWithIdent n
+
+    -- Define an operation that will be cached. This operation runs in the same
+    -- context as the above pipeline.
+    computation :: (String, String, String, BS.ByteString) ~~> ()
+    computation = proc (name, lastname, age, cnt) -> do
+      let summary = "Your name is " ++ name ++ " " ++ lastname ++
+                    " and you are " ++ age ++ ".\n"
+      liftKleisliIO id -< putStrLn $ "Gonna write this summary: "<>summary
+      -- Since the operation runs in the same context, we still have access to
+      -- the 'FileSystem' effect.
+      writeFile "summary" -< BS8.pack summary <> cnt
+      liftKleisliIO id -< putStrLn
+        "I wrote the summary file. I won't do it a second time if \
+        \you re-execute with the same parameters"
+
+--------------------------------------------------------------------------------
+-- Effect interpretation
+
+-- | The core effect needed to collect all our options and build the
+-- corresponding CLI Parser. The effect we should really run once our strands
+-- of effects have been evaluated. It can be pretty general, as long as in the
 -- bottom it allows us to access some IO monad. Note that @CoreEff a b = Parser
 -- (a -> IO b)@ if eff is just @Kleisli IO@
 type CoreEff a b = forall eff m. (HasMonadIO eff m) => Cayley Parser eff a b
@@ -122,6 +172,9 @@ interpretFileAccess (WriteFile name) = Cayley $ f <$> fpParser name "write-"
 interpretCached store runRope (CachedOp cacher f) =
   mapKleisli (CS.cacheKleisliIO (Just 1) cacher Remote.NoCache store) $
     runRope $ loosen f
+
+--------------------------------------------------------------------------------
+-- Pipeline interpretation
 
 main :: IO ()
 main =
