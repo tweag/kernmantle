@@ -70,6 +70,3 @@ executables:
       - bytestring
       - path
       - path-io
-      - mtl
-      - monad-control
-      - exceptions

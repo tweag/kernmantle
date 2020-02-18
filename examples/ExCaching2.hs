@@ -18,10 +18,8 @@ import Prelude hiding (id, (.))
 import Control.Kernmantle.Rope
 import Control.Arrow
 import Control.Category
-import Control.Monad.Catch
 import Control.Monad.IO.Class
-import Control.Monad.Reader
-import Control.Monad.Trans.Control (MonadBaseControl)
+import Control.Monad.Trans.Reader
 import qualified Data.CAS.ContentStore as CS
 import qualified Data.CAS.RemoteCache as Remote
 import Data.Functor.Compose
@@ -127,8 +125,7 @@ interpretFileAccess (WriteFile name) = Cayley $ f <$> fpParser name "write-"
   where f realPath = liftKleisliIO $ BS.writeFile realPath
 
 main :: IO ()
-main =
-  CS.withStore [absdir|/home/yves/_store|] $ \store -> do
+main = do
     let Cayley pipelineParser =
           pipeline & loosen
               -- Order matters here: since interpretCached needs to run the full
@@ -140,4 +137,4 @@ main =
     Kleisli runPipeline <- execParser $ info (helper <*> pipelineParser) $
          header "A kernmantle pipeline with caching"
       <> progDesc "Does the same than exCaching, but caching is done with a class"
-    runReaderT (runPipeline ()) store
+    CS.withStore [absdir|/home/yves/_store|] $ runReaderT $ runPipeline ()
