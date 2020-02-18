@@ -75,4 +75,7 @@ executables:
     dependencies:
       - kernmantle
       - profunctors
-      - proton
+      - lens
+      - unordered-containers
+      - aeson
+      - lens-aeson

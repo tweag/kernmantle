@@ -43,8 +43,6 @@ extra-deps:
   subdirs:
     - cas-hashable
     - cas-store
-- git: https://github.com/ChrisPenner/proton.git
-  commit: 6f48cfefc7d028c357fc268c3f38c31bdb310cd7
 
 # - acme-missiles-0.3
 # - git: https://github.com/commercialhaskell/stack.git
