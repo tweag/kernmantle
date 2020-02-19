@@ -13,7 +13,9 @@
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE Arrows #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Control.Kernmantle.Rope.Internal where
 
@@ -154,20 +156,20 @@ unwrapSomeStrands f g = unwrapRopeRunner . effdimap f g . splitRopeRunner
 -- State
 
 -- | A class for effects which can pass around a mutable state.
-class Arrow eff => ArrowState s eff | eff -> s where
+class Arrow eff => ArrowState s eff where
   {-# MINIMAL stateA | getA, putA #-}
   stateA :: eff (a,s) (b,s) -> eff a b
   stateA eff = proc a -> do
-    s <- getA -< ()
+    s <- getA @s -< ()
     (b,s') <- eff -< (a,s)
-    putA -< s'
+    putA @s -< s'
     returnA -< b
 
   getA :: eff () s
-  getA = stateA $ arr (\((),s) -> (s,s))
+  getA = stateA @s $ arr (\((),s) -> (s,s))
 
   putA :: eff s ()
-  putA = stateA $ arr (\(_,s) -> ((),s))
+  putA = stateA @s $ arr (\(_,s) -> ((),s))
 
 instance (Applicative f, ArrowState s eff) => ArrowState s (Tannen f eff) where
   stateA (Tannen f) = Tannen $ stateA <$> f

@@ -7,6 +7,7 @@
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE TypeApplications #-}
 
 import Prelude hiding (id, (.))
 import Control.Arrow
@@ -30,7 +31,7 @@ add :: Int ~~> ()
 add = strand #add Add
 
 getCounter :: () ~~> Int
-getCounter = getA
+getCounter = getA @Int
 
 --------------------------------------------------------------------------------
 -- Pipeline definition
@@ -52,13 +53,14 @@ type CoreEff = Kleisli (StateT Int IO)
 
 interpretAdd :: Add a b -> CoreEff a b
 interpretAdd Add = proc n -> do
-  k <- getA -< ()
-  putA -< n + k
+  k <- getA @Int -< ()
+  putA @Int -< n + k
 
 main :: IO ()
 main = do
   let Kleisli runPipeline =
-        pipeline & loosen
+        pipeline
+          & loosen
           & entwine_ #add interpretAdd
           & untwine
   n <- execStateT (runPipeline ()) 0
