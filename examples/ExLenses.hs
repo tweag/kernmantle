@@ -6,6 +6,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 -- | Here we use the @wander@ function from Traversing (which Rope instanciates)
 -- that turn any Control.Lens.Traversal into a profunctor optic traversal. This
@@ -15,6 +16,7 @@ import Control.Arrow
 import Control.Kernmantle.Error
 import Control.Kernmantle.Rope
 import Control.Lens hiding (Traversing)
+import Data.Profunctor
 import Data.Profunctor.Traversing
 
 
@@ -66,13 +68,45 @@ getContentsToOutput = proc filename -> do
         Left e -> "Had an error:\n" ++ displayException (e::IOError)
         Right str -> "I read from " ++ filename ++ ":\n" ++ str
 
+-- | Should permit to implement wander_?
+newtype ForgetT r p a b = ForgetT {runForgetT :: p a r}
+
+instance Profunctor p => Profunctor (ForgetT r p) where
+  dimap f _ (ForgetT p) = ForgetT $ lmap f p
+  {-# INLINE dimap #-}
+  lmap f (ForgetT p) = ForgetT $ lmap f p
+  {-# INLINE lmap #-}
+  rmap _ (ForgetT p) = ForgetT p
+  {-# INLINE rmap #-}
+
+instance (Monoid r, Choice p) => Choice (ForgetT r p) where
+  left' (ForgetT p) = ForgetT $ rmap (either id (const mempty) ) $ left' p
+  {-# INLINE left' #-}
+  right' (ForgetT p) = ForgetT $ rmap (either (const mempty) id ) $ right' p
+  {-# INLINE right' #-}
+
+instance (Strong p) => Strong (ForgetT r p) where
+  first' (ForgetT p) = ForgetT $ rmap fst $ first' p
+  {-# INLINE first' #-}
+  second' (ForgetT p) = ForgetT $ rmap snd $ second' p
+  {-# INLINE second' #-}
+
+-- instance (Monoid r, Traversing p) => Traversing (ForgetT r p) where
+--   --traverse' (ForgetT p) = ForgetT $
+--   wander f (ForgetT p) = ForgetT $ wander f p ???
+--   {-# INLINE wander #-}
+
+-- | Not efficient at all for now
+wander_ :: (Traversing p, Monoid b) => (forall f. Applicative f => (a -> f b) -> s -> f t) -> p a () -> p s ()
+wander_ f eff = rmap (const ()) $ wander f (rmap (const mempty) eff)
+
 -- | The Arrow program we will want to run
 prog :: String ~~> ()
 prog = proc name -> do
   strand #console PutLine -< "Hello, " ++ name ++ ". What dataset would you like to open?"
   contents <- getContentsToOutput <<< strand #console GetLine -< ()
   let ds = DataSet ["plop","lala","couic"] [23.1, 4, -434]
-  wander (names . each) (strand #console PutLine >>> arr (const "")) -< ds
+  wander_ (names . each) (strand #console PutLine) -< ds
   strand #console PutLine -< contents
 
 -- | main details every strand, but we can skip the #io strand and the merging
