@@ -19,7 +19,7 @@
 -- | A 'Rope' connects together various effect 'Strand's that get interlaced
 -- together.
 --
--- A 'Strand' is an effet with a parameter and an output. No constraint are
+-- A 'Strand' is an effet with a parameter and an output. No constraint is
 -- placed on the 'Strand', but once combined in a 'Rope', that 'Rope' will be
 -- an 'Arrow' and a 'Profunctor'. 'Strand's in a 'Rope' are named via labels to
 -- limit ambiguity.
@@ -28,31 +28,42 @@
 -- that 'Strand' with the 'strand' function.
 
 module Control.Kernmantle.Rope
-  ( Rope
-  , TightRope, LooseRope
-  , BinEff, Strand
-  , StrandName, StrandEff
-  , InRope(..)
-  , AnyRopeWith
-  , Entwines, SatisfiesAll
-  , Label, fromLabel
-  , SieveTrans (..), HasKleisli, HasMonadIO
-  , type (:->)
-  , (&)
-
-  , tighten, loosen
+  ( -- * Rope
+    Rope
+  , TightRope
+  , LooseRope
+  , tighten
+  , loosen
+  , mapRopeCore
+  , mergeStrands
+    -- * Binary Effects and Strands
+  , BinEff
+  , Strand
+  , StrandName
+  , StrandEff
+  , InRope (..)
+  , liftKleisli
+  , liftKleisliIO
+  , mapKleisli
+  , runSieveCore
+    -- * Rope Interpretation
   , entwine
   , entwine_
   , retwine
   , untwine
-  , runSieveCore
-  , mergeStrands
-  , liftKleisli, liftKleisliIO
-  , mapKleisli
-  , mapRopeCore
-
   , onEachEffFunctor
   , entwineEffFunctors
+    -- * Predicates
+  , AnyRopeWith
+  , Entwines
+  , SatisfiesAll
+  , SieveTrans (..)
+  , HasKleisli
+  , HasMonadIO
+    -- * Reexports
+  , type (:->)
+  , Label, fromLabel
+  , (&)
   )
 where
 
@@ -130,18 +141,20 @@ instance ( HasField record l mantle mantle eff eff
   strand l eff = mkRope $ \r -> weaveStrand (rgetf l r) eff
   {-# INLINE strand #-}
 
--- | Tells whether a collection of @strands@ is in a 'Rope'
+-- | Tells whether a collection of @strands@ is in a 'Rope'.
 type family rope `Entwines` (strands::[Strand]) :: Constraint where
   rope `Entwines` '[] = ()
   rope `Entwines` ('(name, eff) ': strands ) = ( InRope name eff rope
                                                , rope `Entwines` strands )
 
+-- | Tells whether a type satisfies all the given constraints.
 type family (x::k) `SatisfiesAll` (csts::[k -> Constraint]) :: Constraint where
   x `SatisfiesAll` '[] = ()
   x `SatisfiesAll` (c1 ': cnsts) = ( c1 x, x `SatisfiesAll` cnsts)
 
--- | A 'Rope' with some requirements on the strands, though not on their
--- ordering, and on the core
+-- | A @AnyRopeWith strands costraints@ is a 'Rope' with contains the strands
+-- in the variable @strands@ , and whose core effect obeys the constraints in
+-- the @contraints@ variable.
 type AnyRopeWith strands coreConstraints a b = forall s r c.
   (Rope r s c `Entwines` strands, c `SatisfiesAll` coreConstraints)
   => Rope r s c a b
@@ -152,7 +165,8 @@ tighten :: (RecApplicative m, RPureConstrained (IndexableField m) m)
 tighten r = mkRope $ runRope r . fromARec
 {-# INLINE tighten #-}
 
--- | Turn a 'TightRope' into a 'LooseRope'
+-- | Turn a 'TightRope' into a 'LooseRope'. This is very often the first step
+-- in a chain of 'entwine's.
 loosen :: (NatToInt (RLength m))
        => TightRope m core :-> LooseRope m core
 loosen r = mkRope $ runRope r . toARec
@@ -161,38 +175,76 @@ loosen r = mkRope $ runRope r . toARec
 -- | Adds a new effect strand in the 'Rope' by decribing how to interpret that
 -- in the core. The interpretation function is fed the fixpoint of all
 -- interpretation functions, meaning the interpretation function can itself use
--- effects in the 'Rope'.
+-- effects in the 'Rope'. For example, given an effect @Eff@, whose label is
+-- "effect" being interpreted in a core effect @CoreEff@, one first defines an
+-- interpretation function:
 --
--- @(a :-> b)@ is the type function from an effect @a@ to an effect @b@
--- preserving the input/output type params of these effects. It allows us to
--- elude the two type parameters of these effects, but these are still here.
+-- @
+--   interpret ::
+--     (LooseRope '("effect",Eff) ': mantle) core :-> CoreEff) ->
+--      Eff a b -> CoreEff a b
+--
+--   interpret ::
+--     (LooseRope '("effect",Eff) ': mantle) core :-> CoreEff) ->
+--     (Eff :-> CoreEff)
+-- @
+--
+-- where @p :-> q@ corresponds to @forall a b. p a b -> q a b@, and obtain an
+-- interpreter for the strand:
+--
+-- @
+--   strandInterpreter ::
+--     LooseRope ('("effect",Eff) ': mantle) CoreEff :->
+--     LooseRope mantle CoreEff
+--   strandInterpreter = entwine #effect interpret
+-- @
+--
 entwine
   :: forall name binEff mantle core.
-     Label name  -- ^ Give a name to the strand
-  -> (    (LooseRope ('(name,binEff) ': mantle) core :-> core)
-      ->  binEff
-      :-> core) -- ^ The execution function, that receives a way to interpret
-                -- any strand in core
-  -> LooseRope ('(name,binEff) ': mantle) core
-  :-> LooseRope mantle core -- ^ The 'Rope' with the extra effect strand,
-                            -- transformed into the same Rope but with that
-                            -- effect woven in the core
+     Label name
+  -- ^ The name of the strand to be woven.
+  -> ((LooseRope ('(name,binEff) ': mantle) core :-> core) -> (binEff :-> core))
+  -- ^ The interpretation function for the effect, which can depend on the
+  -- global interpretation function for the rope.
+  -> (LooseRope ('(name,binEff) ': mantle) core :-> LooseRope mantle core)
+  -- ^ An interpretation function for a 'Rope' with containing the given effect
+  -- strand, transformed into the same Rope but with that effect woven in the
+  -- core.
 entwine _ interpFn rope = mkRope $ \r ->
   let runThatRope :: LooseRope ('(name,binEff) ': mantle) core :-> core
       runThatRope rope' =
         runRope rope' (Weaver (interpFn runThatRope) :& r)
   in runThatRope rope
 
--- | A version of 'entwine' when the strand can be directly interpreted in the
--- core with no need to trigger other effects
+-- | A version of 'entwine' where the strand can be directly interpreted in the
+-- core with no need to trigger other effects. For example, given an effect
+-- @Eff@, whose label is "effect" being interpreted in a core effect @CoreEff@,
+-- one first defines an interpretation function:
+--
+-- @
+--   interpret :: Eff a b -> CoreEff a b
+--   interpret :: Eff :-> CoreEff
+-- @
+--
+-- and obtain an interpreter for the strand:
+--
+-- @
+--   strandInterpreter ::
+--     LooseRope ('("effect",Eff) ': mantle) CoreEff :->
+--     LooseRope mantle CoreEff
+--   strandInterpreter = entwine_ #effect interpret
+-- @
+--
 entwine_
   :: forall name binEff mantle core.
-     Label name  -- ^ Give a name to the strand
-  -> (binEff :-> core) -- ^ The execution function
-  -> LooseRope ('(name,binEff) ': mantle) core
-  :-> LooseRope mantle core -- ^ The 'Rope' with the extra effect strand,
-                            -- transformed into the same Rope but with that
-                            -- effect woven in the core
+     Label name
+  -- ^ The name of the strand to be woven.
+  -> (binEff :-> core)
+  -- ^ The interpretation function for the effect.
+  -> (LooseRope ('(name,binEff) ': mantle) core :-> LooseRope mantle core)
+  -- ^ An interpretation function for a 'Rope' with containing the given effect
+  -- strand, transformed into the same Rope but with that effect woven in the
+  -- core.
 entwine_ lbl interpFn = entwine lbl (const interpFn)
 {-# INLINE entwine_ #-}
 
@@ -214,11 +266,11 @@ mergeStrands _ _ rope = mkRope $ \(r@(Weaver w) :& rest) ->
   runRope rope (r :& Weaver w :& rest)
 {-# INLINE mergeStrands #-}
 
--- | Strips a 'Rope' of its empty mantel.
+-- | Strips a 'Rope' of its empty mantle. Usually the last step of the
+-- interpretation of a 'Rope'.
 untwine :: LooseRope '[] core :-> core
 untwine r = runRope r RNil
 {-# INLINE untwine #-}
-
 
 -- * Creating and running binary effects from unary effects
 
