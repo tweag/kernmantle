@@ -79,3 +79,18 @@ executables:
       - unordered-containers
       - aeson
       - lens-aeson
+  biomodel:
+    main: examples/BiomodelUseCase.hs
+    dependencies:
+      - kernmantle
+      - cas-hashable
+      - cas-store
+      - optparse-applicative
+      - unordered-containers
+      - lens
+      - profunctors
+      - bytestring
+      - path
+      - path-io
+      - hmatrix
+      - hmatrix-sundials
