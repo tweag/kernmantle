@@ -18,6 +18,7 @@ import Prelude hiding (id, (.))
 import Control.Kernmantle.Rope
 import Control.Arrow
 import Control.Category
+import Control.DeepSeq (($!!))
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Reader
 import qualified Data.CAS.ContentStore as CS
@@ -99,12 +100,13 @@ instance (WithCaching core) => WithCaching (Rope r m core) where
 -- | The pipeline type that we will use. It collects some effects we need. Note
 -- this is actually a polymorphic type, it requires the listed effects, but
 -- could accept more, and the order doesn't matter.
-type a ~~> b =
-  AnyRopeWith '[ '("options", GetOpt)
-               , '("files", FileAccess)
-               , '("ode", SimulateODE)
-               , '("logger", Logger) ]
-              '[Arrow] a b
+type a ~~> b =  -- The pipeline does some entwines internally, so we can't leave
+                -- it polymorphic, we have to force it to be either tight or
+                -- loose
+  TightRopeWith '[ '("files", FileAccess)
+                 , '("options", GetOpt)
+                 , '("logger", Logger) ]
+                 '[Arrow] a b
 
 getOpt n d v = strand #options $ GetOpt n d v
 getOptA n d v = ArrowMonad $ getOpt n d v
@@ -120,9 +122,35 @@ vanderpol mu st =
            [1,0]
            (L.linspace (solTimepoints st) (solStart st, solEnd st))
 
+-- | Wrap all the GetOpt and FileAccess calls in a pipeline to reflect that they
+-- are related to some model
+wrapForModel :: (InRope "options" GetOpt rope, InRope "files" FileAccess rope)
+             => String -> rope a b -> rope a b
+wrapForModel modelName = mapStrand #options changeGetOpt
+                       . mapStrand #files   changeFileAccess
+  where
+    changeGetOpt :: GetOpt a b -> GetOpt a b
+    changeGetOpt (GetOpt n ds v) =
+      GetOpt (modelName<>"-"<>n) ("Model "<>modelName<>": "<>ds) v
+    changeGetOpt (Switch def alts) = Switch (go def) (map go alts)
+      where go (n,ds,v) = (modelName<>"-"<>n, "Model "<>modelName<>": "<>ds, v)
+
+    changeFileAccess :: FileAccess a b -> FileAccess a b
+    changeFileAccess (WriteFile f e) = WriteFile (modelName<>"-"<>f) e
+    changeFileAccess (ReadFile f e)  = ReadFile  (modelName<>"-"<>f) e
+  
 -- | The full pipeline of effects to execute
-pipeline :: () ~~> ()
-pipeline = proc () -> do
+-- pipeline :: () ~~> ()
+-- pipeline :: _
+pipeline =
+  wrapForModel "vanderpol" $
+    tighten . entwine #ode (.interpretSimulateODE) . loosen $
+      solveVanderpol
+
+solveVanderpol :: AnyRopeWith
+  '[ '("ode", SimulateODE), '("files", FileAccess), '("options", GetOpt) ]
+  '[Arrow] () ()
+solveVanderpol = proc () -> do
   odeModel <- appToArrow $
     vanderpol <$> getOptA "mu" "µ parameter" (Just 2)
               <*> (LinspaceSolTimes
@@ -189,9 +217,6 @@ main :: IO ()
 main = do
     let Cayley pipelineParser =
           pipeline & loosen
-            & entwine  #ode     (.interpretSimulateODE)
-              -- interpretSimulateODE needs options, so it needs to be entwined
-              -- before options
             & entwine_ #files   interpretFileAccess
             & entwine_ #logger  interpretLogger
             & entwine_ #options interpretGetOpt

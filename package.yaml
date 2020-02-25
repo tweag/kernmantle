@@ -28,6 +28,7 @@ dependencies:
 - transformers
 - safe-exceptions
 - store
+- lens
 
 library:
   source-dirs: src
@@ -96,3 +97,4 @@ executables:
       - hmatrix-sundials
       - hmatrix-csv
       - vector
+      - deepseq

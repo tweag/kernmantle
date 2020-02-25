@@ -55,6 +55,8 @@ module Control.Kernmantle.Rope
   , entwineEffFunctors
     -- * Predicates
   , AnyRopeWith
+  , TightRopeWith
+  , LooseRopeWith
   , Entwines
   , SatisfiesAll
   , SieveTrans (..)
@@ -69,6 +71,7 @@ where
 
 import Control.Category
 import Control.Arrow
+import Control.Lens (over)
 import Data.Bifunctor
 import Data.Biapplicative
 import Data.Bifunctor.Tannen
@@ -130,16 +133,22 @@ type TightRope = Rope ARec
 -- 'Strand's.
 type LooseRope = Rope Rec
 
+-- | Tells that a strand of effects '(l,eff) is present in the rope
 class InRope l eff rope where
   -- | Lifts a binary effect in the 'Rope'. Performance should be better with a
   -- 'TightRope' than with a 'LooseRope', unless you have very few 'Strand's.
   strand :: Label l -> eff :-> rope
+  -- | Locally transform effects in a strand (before they are woven)
+  mapStrand :: Label l -> (eff :-> eff) -> rope :-> rope
 
 instance ( HasField record l mantle mantle eff eff
          , RecElemFCtx record (Weaver core) )
   => InRope l eff (Rope record mantle core) where
   strand l eff = mkRope $ \r -> weaveStrand (rgetf l r) eff
   {-# INLINE strand #-}
+  mapStrand l f rope =
+    mkRope $ runRope rope . over (rlensfL l) (\(Weaver w) -> Weaver $ w . f)
+  {-# INLINE mapStrand #-}
 
 -- | Tells whether a collection of @strands@ is in a 'Rope'.
 type family rope `Entwines` (strands::[Strand]) :: Constraint where
@@ -158,6 +167,14 @@ type family (x::k) `SatisfiesAll` (csts::[k -> Constraint]) :: Constraint where
 type AnyRopeWith strands coreConstraints a b = forall s r c.
   (Rope r s c `Entwines` strands, c `SatisfiesAll` coreConstraints)
   => Rope r s c a b
+
+type TightRopeWith strands coreConstraints a b = forall s c.
+  (TightRope s c `Entwines` strands, c `SatisfiesAll` coreConstraints)
+  => TightRope s c a b
+
+type LooseRopeWith strands coreConstraints a b = forall s c.
+  (LooseRope s c `Entwines` strands, c `SatisfiesAll` coreConstraints)
+  => LooseRope s c a b
 
 -- | Turn a 'LooseRope' into a 'TightRope'
 tighten :: (RecApplicative m, RPureConstrained (IndexableField m) m)
