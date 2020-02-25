@@ -22,11 +22,13 @@ import Control.Monad.IO.Class
 import Control.Monad.Trans.Reader
 import qualified Data.CAS.ContentStore as CS
 import qualified Data.CAS.RemoteCache as Remote
+import Data.Csv.HMatrix
 import Data.Functor.Compose
 import Data.Profunctor.Cayley
 import Options.Applicative
 import Data.Char (toUpper)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Char8 as BS8
 import Path
 
@@ -61,17 +63,26 @@ data SimulateODE a b where
 
 -- | An effect to ask for some parameter's value
 data GetOpt a b where
-  GetOpt :: String  -- ^ Name
+  -- | Get a raw string option
+  GetOpt :: (Show b, Read b)
+         => String  -- ^ Name
          -> String  -- ^ Docstring
-         -> Maybe String  -- ^ Default value
-         -> GetOpt a String  -- ^ Returns final value
+         -> Maybe b  -- ^ Default value
+         -> GetOpt a b  -- ^ Returns final value
+  -- | Ask to select between alternatives
+  Switch :: (String, String, b) -- ^ Name and docstring of default
+         -> [(String, String, b)]
+            -- ^ Names and docstrings of alternatives
+         -> GetOpt a b
 
 -- | An effect to read or write a file
 data FileAccess a b where
-  ReadFile :: String  -- ^ File name
+  ReadFile :: String  -- ^ File name, without extension
+           -> String  -- ^ File extension
            -> FileAccess a BS.ByteString
-  WriteFile :: String  -- ^ File name
-            -> FileAccess BS.ByteString ()
+  WriteFile :: String  -- ^ File name, without extension
+            -> String  -- ^ File extension
+            -> FileAccess LBS.ByteString ()
 
 -- | The Console effect
 data Logger a b where
@@ -93,17 +104,34 @@ type a ~~> b =
                , '("files", FileAccess)
                , '("ode", SimulateODE)
                , '("logger", Logger) ]
-              '[Arrow, WithCaching] a b
+              '[Arrow] a b
 
 getOpt n d v = strand #options $ GetOpt n d v
+getOptA n d v = ArrowMonad $ getOpt n d v
+appToArrow (ArrowMonad a) = a
 
+data LinspaceSolTimes = LinspaceSolTimes { solStart      :: Double
+                                         , solEnd        :: Double
+                                         , solTimepoints :: Int }
+
+vanderpol :: Double -> LinspaceSolTimes -> ODEModel
+vanderpol mu st =
+  ODEModel (\_t [x,v] -> [v, -x + mu * v * (1-x*x)])
+           [1,0]
+           (L.linspace (solTimepoints st) (solStart st, solEnd st))
 
 -- | The full pipeline of effects to execute
 pipeline :: () ~~> ()
 pipeline = proc () -> do
-  cnt <- strand #files (ReadFile "user") -< ()
-  cache (CS.defaultCacherWithIdent 1) id -< ()
-    
+  odeModel <- appToArrow $
+    vanderpol <$> getOptA "mu" "µ parameter" (Just 2)
+              <*> (LinspaceSolTimes
+                    <$> getOptA "start" "T0 of simulation" (Just 0)
+                    <*> getOptA "end" "Tmax of simulation" (Just 50)
+                    <*> getOptA "timepoints" "Num timepoints of simulation" (Just 1000)) -< ()
+  res <- strand #ode $ SimulateODE -< odeModel
+  strand #files $ WriteFile "res" "csv" -< encodeMatrix res
+
 -- | The core effect we need to collect all our options and build the
 -- corresponding CLI Parser, and hold the store for caching.
 type CoreEff = Cayley Parser (Kleisli (ReaderT CS.ContentStore IO))
@@ -118,46 +146,56 @@ interpretGetOpt :: GetOpt a b -> CoreEff a b
 interpretGetOpt (GetOpt name docstring defVal) =
   Cayley $ liftKleisliIO . const . return <$>
   let (docSuffix, defValField) = case defVal of
-        Just v -> (". Default: "<>v, value v)
+        Just v -> let v' = show v in (". Default: "<>v', value v')
         Nothing -> ("", mempty)
-  in strOption ( long name <> help (docstring<>docSuffix) <>
-                 metavar (map toUpper name) <> defValField )
+  in read <$> (strOption ( long name <> help (docstring<>docSuffix) <>
+                 metavar (map toUpper name) <> defValField ))
+interpretGetOpt (Switch (defName,defDocstring,defVal) alts) =
+  Cayley $ liftKleisliIO . const . return <$> foldr (<|>) defFlag (map toFlag' alts)
+  where
+    defFlag = flag defVal defVal (long defName <> help defDocstring)
+    toFlag' (name, docstring, val) = flag' val (long name <> help docstring)
 
 -- | Run a Console effect in any effect that can access a Kleisli m where m is a
 -- MonadIO
 interpretLogger :: (HasKleisliIO m eff) => Logger a b -> eff a b
 interpretLogger Log = liftKleisliIO $ putStrLn . (">> "++)
 
--- | Solve an ODE model in any arrow
-interpretSimulateODE :: (Arrow eff) => SimulateODE a b -> eff a b
-interpretSimulateODE SimulateODE = arr $ \(ODEModel sys initConds times) ->
-  CV.odeSolve sys initConds times
+-- | Solve an ODE model in any Rope with a GetOpt effect
+interpretSimulateODE :: SimulateODE a b
+                     -> AnyRopeWith '[ '("options", GetOpt) ] '[Arrow] a b
+interpretSimulateODE SimulateODE = proc (ODEModel sys initConds times) -> do
+  solvingFn <- strand #options $
+    Switch  ("cv", "Solve with CV", CV.odeSolve)
+           [("ark", "Solve with Advanced Range-Kutta", ARK.odeSolve)] -< ()
+  returnA -< solvingFn sys initConds times
 
 -- | An option string to get a filepath
-fpParser :: String -> String -> Parser String
-fpParser fname prefix = strOption
+fpParser :: String -> String -> String -> Parser String
+fpParser fname ext prefix = strOption
   ( long (prefix<>fname) <> help ("File bound to "<>fname<>". Default: "<>def)
     <> metavar "PATH" <> value def )
-  where def = fname<>".txt"
+  where def = fname<>"."<>ext
 
 -- | Turns a FileAccess into an option that requests a real filepath, and
 -- performs the access (doesn't support accessing twice the same file for now)
 interpretFileAccess :: FileAccess a b -> CoreEff a b
-interpretFileAccess (ReadFile name) = Cayley $ f <$> fpParser name "read-"
+interpretFileAccess (ReadFile name ext) = Cayley $ f <$> fpParser name ext "read-"
   where f realPath = liftKleisliIO $ const $ BS.readFile realPath
-interpretFileAccess (WriteFile name) = Cayley $ f <$> fpParser name "write-"
-  where f realPath = liftKleisliIO $ BS.writeFile realPath
+interpretFileAccess (WriteFile name ext) = Cayley $ f <$> fpParser name ext "write-"
+  where f realPath = liftKleisliIO $ LBS.writeFile realPath
 
 main :: IO ()
 main = do
     let Cayley pipelineParser =
           pipeline & loosen
-            & entwine_ #options interpretGetOpt
+            & entwine  #ode     (.interpretSimulateODE)
+              -- interpretSimulateODE needs options, so it needs to be entwined
+              -- before options
             & entwine_ #files   interpretFileAccess
-            & entwine_ #ode     interpretSimulateODE
             & entwine_ #logger  interpretLogger
+            & entwine_ #options interpretGetOpt
             & untwine
     Kleisli runPipeline <- execParser $ info (helper <*> pipelineParser) $
-         header "A kernmantle pipeline with caching"
-      <> progDesc "Does the same than exCaching, but caching is done with a class"
+         header "A kernmantle pipeline solving a biomodel"
     CS.withStore [absdir|/home/yves/_store|] $ runReaderT $ runPipeline ()

@@ -94,4 +94,5 @@ executables:
       - path-io
       - hmatrix
       - hmatrix-sundials
+      - hmatrix-csv
       - vector
