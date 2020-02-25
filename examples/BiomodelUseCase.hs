@@ -9,9 +9,10 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
 
--- | This example implements caching with a slightly different API than
--- ExCaching. Instead of encoding caching as an effect to be put in the mantle,
--- it encodes it as a class to be added as a constraint on the core
+-- | This example solves an ODE model (vanderpol for now), exposing its
+-- parameters to the outside world. Left to do is just cache the solving, plot
+-- the results and show that we can solve several models inside the same
+-- pipeline.
 
 import Prelude hiding (id, (.))
 
@@ -55,8 +56,6 @@ type SolTimes = L.Vector Double
 data ODEModel = ODEModel { odeSystem :: ODESystem
                          , odeInitConds :: InitConds
                          , odeSolTimes :: SolTimes }
-
---data ParamModel = 
 
 -- | An effect to simulate an ODE system
 data SimulateODE a b where
@@ -123,22 +122,32 @@ solveVanderpol = proc () -> do
                     <*> getOptA "end" "Tmax of simulation" (Just 50)
                     <*> getOptA "timepoints" "Num timepoints of simulation" (Just 1000)) -< ()
   res <- strand #ode $ SimulateODE -< odeModel
-  strand #files $ WriteFile "res" "csv" -< encodeMatrix res
+  strand #files $ WriteFile "res" "csv" -< encodeMatrix res  
+
+
+-- | Solve an ODE model in any Rope that has a GetOpt effect
+interpretSimulateODE :: SimulateODE a b
+                     -> AnyRopeWith '[ '("options", GetOpt) ] '[Arrow] a b
+interpretSimulateODE SimulateODE = proc (ODEModel sys initConds times) -> do
+  solvingFn <- strand #options $
+    Switch  ("cv", "Solve with CV", CV.odeSolve)
+           [("ark", "Solve with Advanced Range-Kutta", ARK.odeSolve)] -< ()
+  returnA -< solvingFn sys initConds times
   
 -- | Provides some Rope a strand to solve models. This Rope can perform anything
 -- it wants in terms of computations and IO, as it is also given files and
 -- options accesses. BUT if it asks for files and options, @pipelineForModel@
 -- takes care of disambiguating the option names and file paths, in case several
--- models are solved.
-
--- pipelineForModel
---   :: String  -- ^ Model name
---   -> TightRopeWith -- ^ The rope can access files and options addtionally to
---                    -- simulation
---        '[ '("ode", SimulateODE), '("files", FileAccess), '("options", GetOpt) ]
---        '[Arrow] a b
---   -> _
-pipelineForModel modelName =
+-- models are solved in the same whole pipeline.
+withODEStrand
+  :: (AllInMantle '[ '("options", GetOpt), '("files", FileAccess) ] mantle core
+     ,Arrow core)
+  => String  -- ^ Model name
+  -> TightRope ( '("ode", SimulateODE) ': mantle ) core a b
+             -- ^ The rope needing an "ode" strand of effects to solve ODE models
+  -> TightRope mantle core a b
+             -- ^ The rope with no more "ode" strand
+withODEStrand modelName =
   mapStrand #options changeGetOpt .
   mapStrand #files   changeFileAccess .
   tighten . entwine #ode (.interpretSimulateODE) . loosen
@@ -153,6 +162,9 @@ pipelineForModel modelName =
     changeFileAccess (WriteFile f e) = WriteFile (modelName<>"-"<>f) e
     changeFileAccess (ReadFile f e)  = ReadFile  (modelName<>"-"<>f) e
 
+
+-- | The final pipeline to run
+pipeline = withODEStrand "vanderpol" solveVanderpol
 
 -- | The core effect we need to collect all our options and build the
 -- corresponding CLI Parser, and hold the store for caching.
@@ -183,15 +195,6 @@ interpretGetOpt (Switch (defName,defDocstring,defVal) alts) =
 interpretLogger :: (HasKleisliIO m eff) => Logger a b -> eff a b
 interpretLogger Log = liftKleisliIO $ putStrLn . (">> "++)
 
--- | Solve an ODE model in any Rope with a GetOpt effect
-interpretSimulateODE :: SimulateODE a b
-                     -> AnyRopeWith '[ '("options", GetOpt) ] '[Arrow] a b
-interpretSimulateODE SimulateODE = proc (ODEModel sys initConds times) -> do
-  solvingFn <- strand #options $
-    Switch  ("cv", "Solve with CV", CV.odeSolve)
-           [("ark", "Solve with Advanced Range-Kutta", ARK.odeSolve)] -< ()
-  returnA -< solvingFn sys initConds times
-
 -- | An option string to get a filepath
 fpParser :: String -> String -> String -> Parser String
 fpParser fname ext prefix = strOption
@@ -210,7 +213,7 @@ interpretFileAccess (WriteFile name ext) = Cayley $ f <$> fpParser name ext "wri
 main :: IO ()
 main = do
     let Cayley pipelineParser =
-          pipelineForModel "vanderpol" solveVanderpol & loosen
+          pipeline & loosen
             & entwine_ #files   interpretFileAccess
             & entwine_ #logger  interpretLogger
             & entwine_ #options interpretGetOpt

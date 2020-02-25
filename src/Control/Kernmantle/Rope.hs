@@ -42,6 +42,7 @@ module Control.Kernmantle.Rope
   , StrandName
   , StrandEff
   , InRope
+  , AllInMantle
   , strand
   , mapStrand
   , liftKleisli
@@ -177,6 +178,16 @@ type TightRopeWith strands coreConstraints a b = forall s c.
 type LooseRopeWith strands coreConstraints a b = forall s c.
   (LooseRope s c `Entwines` strands, c `SatisfiesAll` coreConstraints)
   => LooseRope s c a b
+
+-- | Useful for functions that want to use tighten/loosen
+type AllInMantle strands mantle core =
+  ( NatToInt (RLength mantle)
+  , RecApplicative mantle
+  , RPureConstrained (IndexableField mantle) mantle
+  , LooseRope mantle core `Entwines` strands
+  , TightRope mantle core `Entwines` strands )
+  -- vinyl constraints make it so we have to repeat the Entwines constraint, as
+  -- we need it for both tight and loose ropes here
 
 -- | Turn a 'LooseRope' into a 'TightRope'
 tighten :: (RecApplicative m, RPureConstrained (IndexableField m) m)
