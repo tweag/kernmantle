@@ -41,7 +41,9 @@ module Control.Kernmantle.Rope
   , Strand
   , StrandName
   , StrandEff
-  , InRope (..)
+  , InRope
+  , strand
+  , mapStrand
   , liftKleisli
   , liftKleisliIO
   , mapKleisli
@@ -134,21 +136,21 @@ type TightRope = Rope ARec
 type LooseRope = Rope Rec
 
 -- | Tells that a strand of effects '(l,eff) is present in the rope
-class InRope l eff rope where
-  -- | Lifts a binary effect in the 'Rope'. Performance should be better with a
-  -- 'TightRope' than with a 'LooseRope', unless you have very few 'Strand's.
-  strand :: Label l -> eff :-> rope
-  -- | Locally transform effects in a strand (before they are woven)
-  mapStrand :: Label l -> (eff :-> eff) -> rope :-> rope
+type family InRope l eff rope where
+  InRope l eff (Rope record mantle core) =
+    ( HasField record l mantle mantle eff eff
+    , RecElemFCtx record (Weaver core) )
 
-instance ( HasField record l mantle mantle eff eff
-         , RecElemFCtx record (Weaver core) )
-  => InRope l eff (Rope record mantle core) where
-  strand l eff = mkRope $ \r -> weaveStrand (rgetf l r) eff
-  {-# INLINE strand #-}
-  mapStrand l f rope =
-    mkRope $ runRope rope . over (rlensfL l) (\(Weaver w) -> Weaver $ w . f)
-  {-# INLINE mapStrand #-}
+strand :: (InRope l eff (Rope r m c))
+       => Label l -> eff :-> Rope r m c
+strand l eff = mkRope $ \r -> weaveStrand (rgetf l r) eff
+{-# INLINE strand #-}
+
+mapStrand :: (InRope l eff (Rope r m c))
+          => Label l -> (eff :-> eff) -> Rope r m c :-> Rope r m c
+mapStrand l f rope =
+  mkRope $ runRope rope . over (rlensfL l) (\(Weaver w) -> Weaver $ w . f)
+{-# INLINE mapStrand #-}
 
 -- | Tells whether a collection of @strands@ is in a 'Rope'.
 type family rope `Entwines` (strands::[Strand]) :: Constraint where

@@ -97,17 +97,6 @@ class WithCaching eff where
 instance (WithCaching core) => WithCaching (Rope r m core) where
   cache = mapRopeCore . cache
 
--- | The pipeline type that we will use. It collects some effects we need. Note
--- this is actually a polymorphic type, it requires the listed effects, but
--- could accept more, and the order doesn't matter.
-type a ~~> b =  -- The pipeline does some entwines internally, so we can't leave
-                -- it polymorphic, we have to force it to be either tight or
-                -- loose
-  TightRopeWith '[ '("files", FileAccess)
-                 , '("options", GetOpt)
-                 , '("logger", Logger) ]
-                 '[Arrow] a b
-
 getOpt n d v = strand #options $ GetOpt n d v
 getOptA n d v = ArrowMonad $ getOpt n d v
 appToArrow (ArrowMonad a) = a
@@ -122,31 +111,7 @@ vanderpol mu st =
            [1,0]
            (L.linspace (solTimepoints st) (solStart st, solEnd st))
 
--- | Wrap all the GetOpt and FileAccess calls in a pipeline to reflect that they
--- are related to some model
-wrapForModel :: (InRope "options" GetOpt rope, InRope "files" FileAccess rope)
-             => String -> rope a b -> rope a b
-wrapForModel modelName = mapStrand #options changeGetOpt
-                       . mapStrand #files   changeFileAccess
-  where
-    changeGetOpt :: GetOpt a b -> GetOpt a b
-    changeGetOpt (GetOpt n ds v) =
-      GetOpt (modelName<>"-"<>n) ("Model "<>modelName<>": "<>ds) v
-    changeGetOpt (Switch def alts) = Switch (go def) (map go alts)
-      where go (n,ds,v) = (modelName<>"-"<>n, "Model "<>modelName<>": "<>ds, v)
-
-    changeFileAccess :: FileAccess a b -> FileAccess a b
-    changeFileAccess (WriteFile f e) = WriteFile (modelName<>"-"<>f) e
-    changeFileAccess (ReadFile f e)  = ReadFile  (modelName<>"-"<>f) e
-  
--- | The full pipeline of effects to execute
--- pipeline :: () ~~> ()
--- pipeline :: _
-pipeline =
-  wrapForModel "vanderpol" $
-    tighten . entwine #ode (.interpretSimulateODE) . loosen $
-      solveVanderpol
-
+-- | Solve a specific model. To do so, requires an "ode" strand.
 solveVanderpol :: AnyRopeWith
   '[ '("ode", SimulateODE), '("files", FileAccess), '("options", GetOpt) ]
   '[Arrow] () ()
@@ -159,6 +124,35 @@ solveVanderpol = proc () -> do
                     <*> getOptA "timepoints" "Num timepoints of simulation" (Just 1000)) -< ()
   res <- strand #ode $ SimulateODE -< odeModel
   strand #files $ WriteFile "res" "csv" -< encodeMatrix res
+  
+-- | Provides some Rope a strand to solve models. This Rope can perform anything
+-- it wants in terms of computations and IO, as it is also given files and
+-- options accesses. BUT if it asks for files and options, @pipelineForModel@
+-- takes care of disambiguating the option names and file paths, in case several
+-- models are solved.
+
+-- pipelineForModel
+--   :: String  -- ^ Model name
+--   -> TightRopeWith -- ^ The rope can access files and options addtionally to
+--                    -- simulation
+--        '[ '("ode", SimulateODE), '("files", FileAccess), '("options", GetOpt) ]
+--        '[Arrow] a b
+--   -> _
+pipelineForModel modelName =
+  mapStrand #options changeGetOpt .
+  mapStrand #files   changeFileAccess .
+  tighten . entwine #ode (.interpretSimulateODE) . loosen
+  where
+    changeGetOpt :: GetOpt a b -> GetOpt a b
+    changeGetOpt (GetOpt n ds v) =
+      GetOpt (modelName<>"-"<>n) ("Model "<>modelName<>": "<>ds) v
+    changeGetOpt (Switch def alts) = Switch (go def) (map go alts)
+      where go (n,ds,v) = (modelName<>"-"<>n, "Model "<>modelName<>": "<>ds, v)
+
+    changeFileAccess :: FileAccess a b -> FileAccess a b
+    changeFileAccess (WriteFile f e) = WriteFile (modelName<>"-"<>f) e
+    changeFileAccess (ReadFile f e)  = ReadFile  (modelName<>"-"<>f) e
+
 
 -- | The core effect we need to collect all our options and build the
 -- corresponding CLI Parser, and hold the store for caching.
@@ -216,7 +210,7 @@ interpretFileAccess (WriteFile name ext) = Cayley $ f <$> fpParser name ext "wri
 main :: IO ()
 main = do
     let Cayley pipelineParser =
-          pipeline & loosen
+          pipelineForModel "vanderpol" solveVanderpol & loosen
             & entwine_ #files   interpretFileAccess
             & entwine_ #logger  interpretLogger
             & entwine_ #options interpretGetOpt
