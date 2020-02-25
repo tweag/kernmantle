@@ -5,6 +5,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE DeriveFunctor #-}
 
 
 -- | In this example, we show how to make an effect that can expose options it
@@ -43,17 +44,20 @@ type a ~~> b =
 
 pipeline :: () ~~> ()
 pipeline = proc () -> do
-  name     <- getOpt "name" "The user's name" $ Just "Yves" -< ()
-  lastname <- getOpt "lastname" "The user's last name" $ Just "Pares" -< ()
-  age      <- getOpt "age" "The user's age" Nothing -< ()
-    -- This demonstrates early failure: if age isn't given, this pipeline won't
-    -- even start
   cnt <- strand #files (ReadFile "user") -< ()
-  let summary = "Your name is " ++ name ++ " " ++ lastname ++
-                " and you are " ++ age ++ ".\n"
+  summary <- getArrow $
+             buildSummary <$> getOpt "name" "The user's name" (Just "Yves")
+                          <*> getOpt "lastname" "The user's last name" (Just "Pares")
+                          <*> getOpt "age" "The user's age" Nothing -< ()
+          -- This demonstrates early failure: if age isn't given, this pipeline
+          -- won't even start
   strand #files (WriteFile "summary") -< BS8.pack summary <> cnt
   where
-    getOpt n d v = strand #options $ GetOpt n d v
+    buildSummary name lastname age =
+        "Your name is " ++ name ++ " " ++ lastname ++ " and you are " ++ age ++ ".\n"
+    getOpt n d v = ArrowMonad $ strand #options $ GetOpt n d v
+    getArrow (ArrowMonad a) = a
+    
 
 -- | The core effect we need to collect all our options and build the
 -- corresponding CLI Parser. What we should really run once our strands of

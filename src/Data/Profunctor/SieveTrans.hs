@@ -10,8 +10,8 @@ module Data.Profunctor.SieveTrans where
 import Control.Arrow
 import Control.Monad.IO.Class
 import Data.Bifunctor.Tannen
-import Data.Profunctor.Cayley
 import Data.Profunctor
+import Data.Profunctor.Cayley
 
 
 -- | A general version of 'MonadIO' for profunctors and categories
@@ -62,8 +62,8 @@ mapStar :: (HasStar m eff)
 mapStar f = mapSieve (Star . f . runStar)
 {-# INLINE mapStar #-}
 
-type HasMonadIO eff m = (MonadIO m, HasKleisli m eff)
+type HasKleisliIO m eff = (HasKleisli m eff, MonadIO m)
 
-liftKleisliIO :: (HasMonadIO eff m) => (a -> IO b) -> eff a b
+liftKleisliIO :: (HasKleisliIO m eff) => (a -> IO b) -> eff a b
 liftKleisliIO f = liftKleisli $ liftIO . f
 {-# INLINE liftKleisliIO #-}

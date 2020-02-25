@@ -59,7 +59,7 @@ module Control.Kernmantle.Rope
   , SatisfiesAll
   , SieveTrans (..)
   , HasKleisli
-  , HasMonadIO
+  , HasKleisliIO
     -- * Reexports
   , type (:->)
   , Label, fromLabel
