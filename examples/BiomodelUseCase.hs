@@ -56,17 +56,15 @@ type InitConds = [Double]
   -- ^ Initial conditions. Should have the same length than the inputs of the
   -- 'ODESystem'
 
-type SolTimes = L.Vector Double
-  -- ^ The timepoints to compute
-
 data ODEModel = ODEModel { odeSystem :: ODESystem
                          , odeVarNames :: [T.Text]
-                         , odeInitConds :: InitConds
-                         , odeSolTimes :: SolTimes }
+                         , odeInitConds :: InitConds }
 
 -- | An effect to simulate an ODE system
 data SimulateODE a b where
   SimulateODE :: SimulateODE ODEModel (L.Matrix Double)
+    -- ^ Given a model of N variables to solve, simulates it and returns a
+    -- matrix with N+1 columns, first column being the time steps
 
 -- | An effect to ask for some parameter's value
 data GetOpt a b where
@@ -107,16 +105,11 @@ getOpt n d v = strand #options $ GetOpt n d v
 getOptA n d v = ArrowMonad $ getOpt n d v
 appToArrow (ArrowMonad a) = a
 
-data LinspaceSolTimes = LinspaceSolTimes { solStart      :: Double
-                                         , solEnd        :: Double
-                                         , solTimepoints :: Int }
-
-vanderpol :: Double -> LinspaceSolTimes -> ODEModel
-vanderpol mu st =
+vanderpol :: Double -> ODEModel
+vanderpol mu =
   ODEModel (\_t [x,v] -> [v, -x + mu * v * (1-x*x)])
            ["x","v"]
            [1,0]
-           (L.linspace (solTimepoints st) (solStart st, solEnd st))
 
 -- | Solve a specific model. To do so, requires an "ode" strand.
 solveVanderpol :: AnyRopeWith
@@ -124,32 +117,29 @@ solveVanderpol :: AnyRopeWith
   '[Arrow] () (L.Matrix Double)
 solveVanderpol = proc () -> do
   odeModel <- appToArrow $
-    vanderpol <$> getOptA "mu" "µ parameter" (Just 2)
-              <*> (LinspaceSolTimes
-                    <$> getOptA "start" "T0 of simulation" (Just 0)
-                    <*> getOptA "end" "Tmax of simulation" (Just 50)
-                    <*> getOptA "timepoints" "Num timepoints of simulation" (Just 1000)) -< ()
+    vanderpol <$> getOptA "mu" "µ parameter" (Just 2) -< ()
   res <- strand #ode $ SimulateODE -< odeModel
-  let resWithTimeCol = L.asColumn (odeSolTimes odeModel) L.||| res
-  strand #files $ WriteFile "res" "csv" -<
-    mkHeader (odeVarNames odeModel) <> encodeMatrix resWithTimeCol
+  strand #files $ WriteFile "res" "csv" -< mkHeader (odeVarNames odeModel) <> encodeMatrix res
   strand #files $ WriteFile "viz" "html" -< LTE.encodeUtf8 $ VL.toHtml $ genViz odeModel res
   returnA -< res
   where
     mkHeader vars = LTE.encodeUtf8 $ LT.fromStrict $
       "Time," <> T.intercalate "," vars <> "\r\n"
+      -- SimulateODE result first column will always be Time, other columns are
+      -- model's variables
 
 genViz :: ODEModel        -- ^ The model that generated the results
-       -> L.Matrix Double -- ^ The results to plot
+       -> L.Matrix Double -- ^ The results to plot. First column is Time
        -> VL.VegaLite
 genViz model mtx =
     VL.toVegaLite [trans [], dat [], enc [], VL.mark VL.Line [], VL.height 1000, VL.width 1000]
   where
+    timeCol:varCols = L.toColumns mtx
     dat = VL.dataFromColumns []
-      . VL.dataColumn "Time" (VL.Numbers $ L.toList $ odeSolTimes model)
+      . VL.dataColumn "Time" (VL.Numbers $ L.toList timeCol)
       . foldr (.) id
         (map (\(cn,ys) -> VL.dataColumn cn (VL.Numbers $ L.toList ys)) $
-             zip (odeVarNames model) $ L.toColumns mtx)
+             zip (odeVarNames model) varCols)
     trans = VL.transform
       . VL.foldAs (odeVarNames model) "Variable" "Value"
         -- Creates two new columns for each column, so we can use them for
@@ -159,14 +149,27 @@ genViz model mtx =
       . VL.position VL.Y [ VL.PName "Value", VL.PmType VL.Quantitative ]
       . VL.color         [ VL.MName "Variable", VL.MmType VL.Nominal ]
 
+data SolTimes = SolTimes { solStart      :: Double
+                         , solEnd        :: Double
+                         , solTimepoints :: Int }
+
+expandSolTimes :: SolTimes -> L.Vector Double
+expandSolTimes st =
+  L.linspace (solTimepoints st) (solStart st, solEnd st)
+
 -- | Solve an ODE model in any Rope that has a GetOpt effect
 interpretSimulateODE :: SimulateODE a b
                      -> AnyRopeWith '[ '("options", GetOpt) ] '[Arrow] a b
 interpretSimulateODE SimulateODE = proc mdl -> do
+  times <- appToArrow $ SolTimes
+    <$> getOptA "start" "T0 of simulation" (Just 0)
+    <*> getOptA "end" "Tmax of simulation" (Just 50)
+    <*> getOptA "timepoints" "Num timepoints of simulation" (Just 1000) -< ()
   solvingFn <- strand #options $
     Switch  ("cv", "Solve with CV", CV.odeSolve)
            [("ark", "Solve with Advanced Range-Kutta", ARK.odeSolve)] -< ()
-  returnA -< solvingFn (odeSystem mdl) (odeInitConds mdl) (odeSolTimes mdl)
+  let res = solvingFn (odeSystem mdl) (odeInitConds mdl) (expandSolTimes times)
+  returnA -< L.asColumn (expandSolTimes times) L.||| res
   
 -- | Provides some Rope a strand to solve models. This Rope can perform anything
 -- it wants in terms of computations and IO, as it is also given files and
