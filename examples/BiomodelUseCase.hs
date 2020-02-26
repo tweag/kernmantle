@@ -12,10 +12,21 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE DeriveGeneric #-}
 
--- | This example solves an ODE model (vanderpol for now), exposing its
--- parameters to the outside world. Left to do is just cache the solving, plot
--- the results and show that we can solve several models inside the same
--- pipeline.
+-- | This example:
+--
+-- - creates an 'ODEModel' type
+-- - describes a vanderpol model as an 'ODEModel'
+-- - builds a pipeline exposing to the user the parameters of this model
+--   and of the solver
+-- - solves the model, caching the results
+-- - writes the result as a CSV file to a parameterizable file
+-- - generates a vega lite visualisation of the result
+--
+-- More generally this examples shows how to use kernmantle effects to
+-- build all these features.
+--
+-- All the pipeline primitives present in this file are generic,
+-- they could be reused as-is for different 'ODEModel's. See 'pipeline'.
 
 import Prelude hiding (id, (.))
 
@@ -71,9 +82,10 @@ data ODEModel params = ODEModel
   { odeSystem :: ODESystem
   , odeVarNames :: [T.Text]
   , odeInitConds :: InitConds
-  , odeParams :: params
-  , odeModelId :: String } -- The id is used for caching purposes
--- | The hash takes into account the model Id and the initial conditions
+  , odeParams :: params -- params are used for caching purposes
+  , odeModelId :: String } -- The id is used for caching purposes (as the
+                           -- ODESystem isn't hashable)
+-- | The hash takes into account the model Id, params and initial conditions
 instance (Monad m, CS.ContentHashable m params) => CS.ContentHashable m (ODEModel params) where
   contentHashUpdate ctx mdl =
     CS.contentHashUpdate ctx (odeInitConds mdl, odeModelId mdl, odeParams mdl)
@@ -153,6 +165,7 @@ getOptA n d v = ArrowMonad $ getOpt n d v
 -- | Unwrap an applicative to get back an arrow
 appToArrow (ArrowMonad a) = a
 
+-- | Generate a vega-lite visualisation of the results of a simulation
 genViz :: AnyRopeWith
   '[ '("options", GetOpt) ]
   '[Arrow]
@@ -167,8 +180,9 @@ genViz = proc (model, mtx) -> do
              zip (odeVarNames model) varCols)
     trans = VL.transform
       . VL.foldAs (odeVarNames model) "Variable" "Value"
-        -- Creates two new columns for each column, so we can use them for
-        -- Y-position and color encoding
+        -- Creates two new columns for each variable of the model, so we can use
+        -- the variable name and value resp. for color encoding and Y-position
+        -- encoding
     enc = VL.encoding
       . VL.position VL.X [ VL.PName "Time", VL.PmType VL.Quantitative ]
       . VL.position VL.Y [ VL.PName "Value", VL.PmType VL.Quantitative ]
@@ -194,8 +208,8 @@ expandSolTimes :: SolTimes -> L.Vector Double
 expandSolTimes st =
   L.linspace (solTimepoints st) (solStart st, solEnd st)
 
--- | Solve an ODE model in any Arrow Rope that has a GetOpt effect. Caches
--- results.
+-- | Solve an ODE model in any Arrow Rope that can cache computations and has a
+-- GetOpt effect.
 interpretSimulateODE
   :: SimulateODE a b
   -> AnyRopeWith '[ '("options", GetOpt), '("logger",Logger) ] '[Arrow, WithCaching] a b
@@ -223,24 +237,6 @@ interpretSimulateODE SimulateODE = proc mdl -> do
           -- before returning it
       strand #logger Log -< "Done solving"
       returnA -< L.toLists resMtxWithTimeCol
-  
--- | Provides some Rope a strand to solve models. This Rope can perform anything
--- it wants in terms of computations and IO, as it is also given files and
--- options accesses.
-withODEStrand
-  :: ( AllInMantle '[ '("files", FileAccess), '("options",GetOpt), '("logger",Logger) ]
-                  mantle core
-     , Arrow core, WithNamespacing core, WithCaching core )
-  => String  -- ^ Model name
-  -> TightRope ( '("ode", SimulateODE) ': mantle ) core a b
-             -- ^ The rope needing an "ode" strand of effects to solve ODE models
-  -> TightRope mantle core a b
-             -- ^ The rope with no more "ode" strand
-withODEStrand modelName =
-  addToNamespace modelName .
-    -- This rope will run in a namespace (named like the model)
-  tighten . entwine #ode (.interpretSimulateODE) . loosen
-    -- We interpret SimulateODE effects coming from that rope
 
 -- | Builds a namespace prefix, with some beginning, separator and ending. If
 -- namespace is empty, returns the empty string.
@@ -301,10 +297,10 @@ interpretGetOpt (Switch (defName,defDocstring,defVal) alts) =
     Cayley $ arr . const <$>
       let defFlag =
             flag defVal defVal (   long (nsPrefix ns "" "-" "-" <> defName)
-                                <> help defDocstring )
+                                <> help (nsPrefix ns "In " "." ": "<> defDocstring) )
           toFlag' (name, docstring, val) =
             flag' val (   long (nsPrefix ns "" "-" "-" <> name)
-                       <> help docstring )
+                       <> help (nsPrefix ns "In " "." ": "<>docstring) )
       in foldr (<|>) defFlag (map toFlag' alts)
 
 
@@ -338,11 +334,14 @@ solveVanderpol = proc () -> do
       -- SimulateODE result first column will always be Time, other columns are
       -- model's variables
 
--- | The final pipeline to run
+-- | The final pipeline to run. It solves two models to show that the same
+-- tooling can be used to solve 2 models in the same pipeline with no risks of
+-- options or files conflicting (thanks to namespaces)
 pipeline = proc () -> do
   strand #logger Log -< "Beginning pipeline"
-  withODEStrand "vanderpol" solveVanderpol -< ()
-  withODEStrand "glycolysis" solveVanderpol -< ()
+  addToNamespace "vanderpol" solveVanderpol -< ()
+  addToNamespace "glycolysis" solveVanderpol -< ()
+    -- We reuse vanderpol until we have coded the real glycolysis model
   strand #logger Log -< "Pipeline finished"
 
 --- * END OF PIPELINE
@@ -365,16 +364,20 @@ instance WithCaching CoreEff where
     store <- ask
     CS.cacheKleisliIO (Just 1) c Remote.NoCache store act i
 
--- | We need to get the namespace to invoke 'interpretFileAccess'
 main :: IO ()
 main = do
   let interpretFileAccess' toCore fileAccessEffect =
+        -- We need to get the namespace to invoke 'interpretFileAccess'
         Cayley $ reader $ \ns ->
           runReader (runCayley $ toCore $ interpretFileAccess ns fileAccessEffect) ns
       Cayley namespacedPipelineParser =
           pipeline & loosen
+            & entwine  #ode     (.interpretSimulateODE)
+               -- interpretSimulateODE needs #logger and #options, so it must be
+               -- entwined before them
             & entwine  #files   interpretFileAccess'
-               -- #files must go first because it needs #logger and #options
+               -- interpretFileAccess needs #logger and #options, so it must be
+               -- entwined before them
             & entwine_ #logger  interpretLogger
             & entwine_ #options interpretGetOpt
             & untwine
