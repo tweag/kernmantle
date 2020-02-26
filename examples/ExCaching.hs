@@ -178,7 +178,7 @@ interpretCached store runRope (CachedOp cacher f) =
 
 main :: IO ()
 main =
-  CS.withStore [absdir|/home/yves/_store|] $ \store -> do
+  CS.withStore [absdir|/tmp/_store|] $ \store -> do
     let Cayley pipelineParser =
           pipeline & loosen
               -- Order matters here: since interpretCached needs to run the full

@@ -9,6 +9,8 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE DeriveGeneric #-}
 
 -- | This example solves an ODE model (vanderpol for now), exposing its
 -- parameters to the outside world. Left to do is just cache the solving, plot
@@ -23,9 +25,11 @@ import Control.Category
 import Control.DeepSeq (($!!))
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Reader
+import qualified Data.CAS.ContentHashable as CS
 import qualified Data.CAS.ContentStore as CS
 import qualified Data.CAS.RemoteCache as Remote
 import Data.Csv.HMatrix
+import Data.Functor.Identity (Identity)
 import Data.Functor.Compose
 import Data.List (intercalate)
 import Data.Maybe (fromJust)
@@ -39,7 +43,7 @@ import Data.Char (toUpper)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Char8 as BS8
-import Path
+import GHC.Generics (Generic)
 
 import qualified Numeric.Sundials.ARKode.ODE as ARK
 import qualified Numeric.Sundials.CVode.ODE  as CV
@@ -48,6 +52,7 @@ import           Numeric.Sundials.Types
 
 import qualified Graphics.Vega.VegaLite as VL
 
+import Path
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeDirectory)
 
@@ -62,13 +67,21 @@ type InitConds = [Double]
   -- ^ Initial conditions. Should have the same length than the inputs of the
   -- 'ODESystem'
 
-data ODEModel = ODEModel { odeSystem :: ODESystem
-                         , odeVarNames :: [T.Text]
-                         , odeInitConds :: InitConds }
+data ODEModel params = ODEModel
+  { odeSystem :: ODESystem
+  , odeVarNames :: [T.Text]
+  , odeInitConds :: InitConds
+  , odeParams :: params
+  , odeModelId :: String } -- The id is used for caching purposes
+-- | The hash takes into account the model Id and the initial conditions
+instance (Monad m, CS.ContentHashable m params) => CS.ContentHashable m (ODEModel params) where
+  contentHashUpdate ctx mdl =
+    CS.contentHashUpdate ctx (odeInitConds mdl, odeModelId mdl, odeParams mdl)
 
 -- | An effect to simulate an ODE system
 data SimulateODE a b where
-  SimulateODE :: SimulateODE ODEModel (L.Matrix Double)
+  SimulateODE :: (CS.ContentHashable Identity p)  -- We'll hash the model for caching purposes
+              => SimulateODE (ODEModel p) (L.Matrix Double)
     -- ^ Given a model of N variables to solve, simulates it and returns a
     -- matrix with N+1 columns, first column being the time steps
 
@@ -143,7 +156,7 @@ appToArrow (ArrowMonad a) = a
 genViz :: AnyRopeWith
   '[ '("options", GetOpt) ]
   '[Arrow]
-   (ODEModel, L.Matrix Double) VL.VegaLite
+   (ODEModel p, L.Matrix Double) VL.VegaLite
 genViz = proc (model, mtx) -> do
   let
     timeCol:varCols = L.toColumns mtx
@@ -167,14 +180,25 @@ genViz = proc (model, mtx) -> do
 data SolTimes = SolTimes { solStart      :: Double
                          , solEnd        :: Double
                          , solTimepoints :: Int }
+  deriving (Generic)
+instance (Monad m) => CS.ContentHashable m SolTimes
+
+data ODESolvingAlgorithm = CVode | ARKode
+  deriving (Show, Generic)
+instance (Monad m) => CS.ContentHashable m ODESolvingAlgorithm
+
+solveWith CVode = CV.odeSolve
+solveWith ARKode = ARK.odeSolve
 
 expandSolTimes :: SolTimes -> L.Vector Double
 expandSolTimes st =
   L.linspace (solTimepoints st) (solStart st, solEnd st)
 
--- | Solve an ODE model in any Arrow Rope that has a GetOpt effect
-interpretSimulateODE :: SimulateODE a b
-                     -> AnyRopeWith '[ '("options", GetOpt), '("logger",Logger) ] '[Arrow] a b
+-- | Solve an ODE model in any Arrow Rope that has a GetOpt effect. Caches
+-- results.
+interpretSimulateODE
+  :: SimulateODE a b
+  -> AnyRopeWith '[ '("options", GetOpt), '("logger",Logger) ] '[Arrow, WithCaching] a b
 interpretSimulateODE SimulateODE = proc mdl -> do
   -- We ask for some parameters related to the simulation process:
   times <- appToArrow $ SolTimes
@@ -182,23 +206,31 @@ interpretSimulateODE SimulateODE = proc mdl -> do
     <*> getOptA "end" "Tmax of simulation" (Just 50)
     <*> getOptA "timepoints" "Num timepoints of simulation" (Just 1000) -< ()
   -- We ask for the solving algorithm to use:
-  solvingFn <- strand #options $ Switch
-    ("cv", "Solve with CVode algorithm. See https://computing.llnl.gov/projects/sundials/cvode", CV.odeSolve)
-    [("ark", "Solve with ARKode algorithm. See https://computing.llnl.gov/projects/sundials/arkode", ARK.odeSolve)]
+  solvingAlg <- strand #options $ Switch
+    ("cv", "Solve with CVode algorithm. See https://computing.llnl.gov/projects/sundials/cvode", CVode)
+    [("ark", "Solve with ARKode algorithm. See https://computing.llnl.gov/projects/sundials/arkode", ARKode)]
     -< ()
   -- Finally we can solve the system:
-  let resMtx = solvingFn (odeSystem mdl) (odeInitConds mdl) (expandSolTimes times)
-  -- We concat the time vector as the first column of the result matrix before
-  -- returning it:
-  strand #logger Log -< "Done solving"
-  returnA -< L.asColumn (expandSolTimes times) L.||| resMtx
+  arr L.fromLists . cache (CS.defaultCacherWithIdent 1123) solve -< (mdl,times,solvingAlg)
+    -- We need to convert to and from list as L.Matrix is not directly
+    -- serializable via a Store instance
+  where
+    solve = proc (mdl,times,solvingAlg) -> do
+      strand #logger Log -< "Start solving"
+      let resMtx = solveWith solvingAlg (odeSystem mdl) (odeInitConds mdl) (expandSolTimes times)
+          resMtxWithTimeCol = L.asColumn (expandSolTimes times) L.||| resMtx
+          -- We concat the time vector as the first column of the result matrix
+          -- before returning it
+      strand #logger Log -< "Done solving"
+      returnA -< L.toLists resMtxWithTimeCol
   
 -- | Provides some Rope a strand to solve models. This Rope can perform anything
 -- it wants in terms of computations and IO, as it is also given files and
 -- options accesses.
 withODEStrand
-  :: (AllInMantle '[ '("files", FileAccess), '("options",GetOpt), '("logger",Logger) ] mantle core
-     ,Arrow core, WithNamespacing core)
+  :: ( AllInMantle '[ '("files", FileAccess), '("options",GetOpt), '("logger",Logger) ]
+                  mantle core
+     , Arrow core, WithNamespacing core, WithCaching core )
   => String  -- ^ Model name
   -> TightRope ( '("ode", SimulateODE) ': mantle ) core a b
              -- ^ The rope needing an "ode" strand of effects to solve ODE models
@@ -279,11 +311,13 @@ interpretGetOpt (Switch (defName,defDocstring,defVal) alts) =
 --- * THE PIPELINE
 
 -- | The vanderpol model
-vanderpol :: Double -> ODEModel
+vanderpol :: Double -> ODEModel Double
 vanderpol mu =
   ODEModel (\_t [x,v] -> [v, -x + mu * v * (1-x*x)])
            ["x","v"]
            [1,0]
+           mu
+           "vanderpol0.1"
 
 -- | Solve a specific model. To do so, requires an "ode" strand.
 solveVanderpol :: AnyRopeWith
@@ -347,5 +381,5 @@ main = do
       Cayley pipelineParser = runReader namespacedPipelineParser []
   Kleisli runPipeline <- execParser $ info (helper <*> pipelineParser) $
          header "A kernmantle pipeline solving a biomodel"
-  CS.withStore [absdir|/home/yves/_store|] $ runReaderT $ runPipeline ()
+  CS.withStore [absdir|/tmp/_store|] $ runReaderT $ runPipeline ()
   return ()
