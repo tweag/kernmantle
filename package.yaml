@@ -98,3 +98,5 @@ executables:
       - hmatrix-csv
       - vector
       - deepseq
+      - hvega
+      - text

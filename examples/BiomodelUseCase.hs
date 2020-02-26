@@ -1,5 +1,6 @@
 {-# LANGUAGE Arrows #-}
 {-# LANGUAGE OverloadedLabels #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE DataKinds #-}
@@ -27,6 +28,9 @@ import qualified Data.CAS.RemoteCache as Remote
 import Data.Csv.HMatrix
 import Data.Functor.Compose
 import Data.Profunctor.Cayley
+import qualified Data.Text as T
+import qualified Data.Text.Lazy as LT
+import qualified Data.Text.Lazy.Encoding as LTE
 import Options.Applicative
 import Data.Char (toUpper)
 import qualified Data.ByteString as BS
@@ -38,6 +42,8 @@ import qualified Numeric.Sundials.ARKode.ODE as ARK
 import qualified Numeric.Sundials.CVode.ODE  as CV
 import qualified Numeric.LinearAlgebra as L
 import           Numeric.Sundials.Types
+
+import qualified Graphics.Vega.VegaLite as VL
 
 
 type ODESystem = Double -> [Double] -> [Double]
@@ -54,6 +60,7 @@ type SolTimes = L.Vector Double
   -- ^ The timepoints to compute
 
 data ODEModel = ODEModel { odeSystem :: ODESystem
+                         , odeVarNames :: [T.Text]
                          , odeInitConds :: InitConds
                          , odeSolTimes :: SolTimes }
 
@@ -107,13 +114,14 @@ data LinspaceSolTimes = LinspaceSolTimes { solStart      :: Double
 vanderpol :: Double -> LinspaceSolTimes -> ODEModel
 vanderpol mu st =
   ODEModel (\_t [x,v] -> [v, -x + mu * v * (1-x*x)])
+           ["x","v"]
            [1,0]
            (L.linspace (solTimepoints st) (solStart st, solEnd st))
 
 -- | Solve a specific model. To do so, requires an "ode" strand.
 solveVanderpol :: AnyRopeWith
   '[ '("ode", SimulateODE), '("files", FileAccess), '("options", GetOpt) ]
-  '[Arrow] () ()
+  '[Arrow] () (L.Matrix Double)
 solveVanderpol = proc () -> do
   odeModel <- appToArrow $
     vanderpol <$> getOptA "mu" "µ parameter" (Just 2)
@@ -122,17 +130,43 @@ solveVanderpol = proc () -> do
                     <*> getOptA "end" "Tmax of simulation" (Just 50)
                     <*> getOptA "timepoints" "Num timepoints of simulation" (Just 1000)) -< ()
   res <- strand #ode $ SimulateODE -< odeModel
-  strand #files $ WriteFile "res" "csv" -< encodeMatrix res  
+  let resWithTimeCol = L.asColumn (odeSolTimes odeModel) L.||| res
+  strand #files $ WriteFile "res" "csv" -<
+    mkHeader (odeVarNames odeModel) <> encodeMatrix resWithTimeCol
+  strand #files $ WriteFile "viz" "html" -< LTE.encodeUtf8 $ VL.toHtml $ genViz odeModel res
+  returnA -< res
+  where
+    mkHeader vars = LTE.encodeUtf8 $ LT.fromStrict $
+      "Time," <> T.intercalate "," vars <> "\r\n"
 
+genViz :: ODEModel        -- ^ The model that generated the results
+       -> L.Matrix Double -- ^ The results to plot
+       -> VL.VegaLite
+genViz model mtx =
+    VL.toVegaLite [trans [], dat [], enc [], VL.mark VL.Line [], VL.height 1000, VL.width 1000]
+  where
+    dat = VL.dataFromColumns []
+      . VL.dataColumn "Time" (VL.Numbers $ L.toList $ odeSolTimes model)
+      . foldr (.) id
+        (map (\(cn,ys) -> VL.dataColumn cn (VL.Numbers $ L.toList ys)) $
+             zip (odeVarNames model) $ L.toColumns mtx)
+    trans = VL.transform
+      . VL.foldAs (odeVarNames model) "Variable" "Value"
+        -- Creates two new columns for each column, so we can use them for
+        -- Y-position and color encoding
+    enc = VL.encoding
+      . VL.position VL.X [ VL.PName "Time", VL.PmType VL.Quantitative ]
+      . VL.position VL.Y [ VL.PName "Value", VL.PmType VL.Quantitative ]
+      . VL.color         [ VL.MName "Variable", VL.MmType VL.Nominal ]
 
 -- | Solve an ODE model in any Rope that has a GetOpt effect
 interpretSimulateODE :: SimulateODE a b
                      -> AnyRopeWith '[ '("options", GetOpt) ] '[Arrow] a b
-interpretSimulateODE SimulateODE = proc (ODEModel sys initConds times) -> do
+interpretSimulateODE SimulateODE = proc mdl -> do
   solvingFn <- strand #options $
     Switch  ("cv", "Solve with CV", CV.odeSolve)
            [("ark", "Solve with Advanced Range-Kutta", ARK.odeSolve)] -< ()
-  returnA -< solvingFn sys initConds times
+  returnA -< solvingFn (odeSystem mdl) (odeInitConds mdl) (odeSolTimes mdl)
   
 -- | Provides some Rope a strand to solve models. This Rope can perform anything
 -- it wants in terms of computations and IO, as it is also given files and
@@ -175,6 +209,8 @@ instance WithCaching CoreEff where
     store <- ask
     CS.cacheKleisliIO (Just 1) c Remote.NoCache store act i
 
+
+
 -- | Turns a GetOpt into an actual optparse-applicative Parser
 interpretGetOpt :: GetOpt a b -> CoreEff a b
 interpretGetOpt (GetOpt name docstring defVal) =
@@ -212,12 +248,13 @@ interpretFileAccess (WriteFile name ext) = Cayley $ f <$> fpParser name ext "wri
 
 main :: IO ()
 main = do
-    let Cayley pipelineParser =
+  let Cayley pipelineParser =
           pipeline & loosen
             & entwine_ #files   interpretFileAccess
             & entwine_ #logger  interpretLogger
             & entwine_ #options interpretGetOpt
             & untwine
-    Kleisli runPipeline <- execParser $ info (helper <*> pipelineParser) $
+  Kleisli runPipeline <- execParser $ info (helper <*> pipelineParser) $
          header "A kernmantle pipeline solving a biomodel"
-    CS.withStore [absdir|/home/yves/_store|] $ runReaderT $ runPipeline ()
+  CS.withStore [absdir|/home/yves/_store|] $ runReaderT $ runPipeline ()
+  return ()
