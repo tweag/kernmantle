@@ -74,15 +74,13 @@ data GetOpt a b where
   -- | Get a raw string option
   GetOpt :: (Show b, Typeable b) -- So we can show the default value and its
                                  -- type
-         => [String] -- ^ Namespace
-         -> ReadM b  -- ^ How to parse the option
+         => ReadM b  -- ^ How to parse the option
          -> String  -- ^ Name
          -> String  -- ^ Docstring
          -> Maybe b  -- ^ Default value
          -> GetOpt a b  -- ^ Returns final value
   -- | Ask to select between alternatives
-  Switch :: [String]  -- ^ Namespace
-         -> (String, String, b) -- ^ Name and docstring of default
+  Switch :: (String, String, b) -- ^ Name and docstring of default
          -> [(String, String, b)]
             -- ^ Names and docstrings of alternatives
          -> GetOpt a b
@@ -98,8 +96,7 @@ data FileAccess a b where
 
 -- | The Console effect
 data Logger a b where
-  Log :: [String] -- ^ Namespace
-      -> Logger String ()
+  Log :: Logger String ()
 
 -- | An class to cache part of the pipeline
 class WithCaching eff where
@@ -109,11 +106,30 @@ class WithCaching eff where
 instance (WithCaching core) => WithCaching (Rope r m core) where
   cache = mapRopeCore . cache
 
+-- | Used by option parser and logger, to know where the option and line to log
+-- comes from
+type Namespace = [String]
+
+-- | If an effect can hold a namespace.
+class WithNamespacing eff where
+  -- | Add an element to the namespace
+  addToNamespace :: String -> eff a b -> eff a b
+
+-- | How to add a namespace to tasks in a Rope. Several effects require to be
+-- interpreted in some @Cayley (Reader Namespace)@ because they need a namespace
+-- to construct their effects
+instance WithNamespacing (Cayley (Reader Namespace) eff) where
+  addToNamespace n (Cayley eff) = Cayley (local (++[n]) eff)
+
+-- | Any rope whose core has namespacing has namespacing too
+instance (WithNamespacing core) => WithNamespacing (Rope r m core) where
+  addToNamespace = mapRopeCore . addToNamespace
+
 -- | For options parsed by IsString class
-getStrOpt n d v = strand #options $ GetOpt [] str n d v
+getStrOpt n d v = strand #options $ GetOpt str n d v
 
 -- | For options parsed by Read class
-getOpt n d v = strand #options $ GetOpt [] auto n d v
+getOpt n d v = strand #options $ GetOpt auto n d v
 
 -- | An Applicative version of 'getOpt'
 getOptA n d v = ArrowMonad $ getOpt n d v
@@ -163,7 +179,7 @@ interpretSimulateODE SimulateODE = proc mdl -> do
     <*> getOptA "end" "Tmax of simulation" (Just 50)
     <*> getOptA "timepoints" "Num timepoints of simulation" (Just 1000) -< ()
   -- We ask for the solving algorithm to use:
-  solvingFn <- strand #options $ Switch []
+  solvingFn <- strand #options $ Switch
     ("cv", "Solve with CVode algorithm. See https://computing.llnl.gov/projects/sundials/cvode", CV.odeSolve)
     [("ark", "Solve with ARKode algorithm. See https://computing.llnl.gov/projects/sundials/arkode", ARK.odeSolve)]
     -< ()
@@ -171,78 +187,57 @@ interpretSimulateODE SimulateODE = proc mdl -> do
   let resMtx = solvingFn (odeSystem mdl) (odeInitConds mdl) (expandSolTimes times)
   -- We concat the time vector as the first column of the result matrix before
   -- returning it:
-  strand #logger (Log []) -< "Done solving"
+  strand #logger Log -< "Done solving"
   returnA -< L.asColumn (expandSolTimes times) L.||| resMtx
   
 -- | Provides some Rope a strand to solve models. This Rope can perform anything
 -- it wants in terms of computations and IO, as it is also given files and
--- options accesses. BUT if it asks for files and options, @pipelineForModel@
--- takes care of disambiguating the option names and file paths, in case several
--- models are solved in the same whole pipeline.
+-- options accesses.
 withODEStrand
-  :: (AllInMantle '[ '("options", GetOpt), '("files", FileAccess), '("logger", Logger) ] mantle core
-     ,Arrow core)
+  :: (AllInMantle '[ '("files", FileAccess), '("options",GetOpt), '("logger",Logger) ] mantle core
+     ,Arrow core, WithNamespacing core)
   => String  -- ^ Model name
   -> TightRope ( '("ode", SimulateODE) ': mantle ) core a b
              -- ^ The rope needing an "ode" strand of effects to solve ODE models
   -> TightRope mantle core a b
              -- ^ The rope with no more "ode" strand
 withODEStrand modelName =
-  mapStrand #options changeGetOpt .
-  mapStrand #files   changeFileAccess .
-  mapStrand #logger  changeLogger .
+  addToNamespace modelName .
+    -- This rope will run in a namespace (named like the model)
   tighten . entwine #ode (.interpretSimulateODE) . loosen
-  where
-    changeGetOpt :: GetOpt a b -> GetOpt a b
-    changeGetOpt (GetOpt ns p n ds v) = GetOpt (modelName:ns) p n ds v
-    changeGetOpt (Switch ns def alts) = Switch (modelName:ns) def alts
+    -- We interpret SimulateODE effects coming from that rope
 
-    changeFileAccess :: FileAccess a b -> FileAccess a b
-    changeFileAccess (WriteFile f e) = WriteFile (modelName<>"-"<>f) e
-    changeFileAccess (ReadFile f e)  = ReadFile  (modelName<>"-"<>f) e
-
-    changeLogger :: Logger a b -> Logger a b
-    changeLogger (Log ns) = Log (("Model_"<>modelName):ns)
-
--- | Run a Console effect in any effect that can access a Kleisli m where m is a
+-- | Run a Console effect in any effect that can access a namespace and Kleisli m where m is a
 -- MonadIO
-interpretLogger :: (HasKleisliIO m eff) => Logger a b -> eff a b
-interpretLogger (Log ns) = liftKleisliIO $
-  putStrLn . (intercalate "." ns <> ">> "++)
+interpretLogger :: (HasKleisliIO m eff) => Logger a b -> Cayley (Reader Namespace) eff a b
+interpretLogger Log =
+  Cayley $ reader $ \ns ->  -- We need the namespace as for each line logged, we
+                            -- want to print in which namespace it was logged
+    liftKleisliIO $ putStrLn . (intercalate "." ns <> ">> "++)
 
--- | Weave a FileAccess into any rope that can access options (to possibly
--- rebind the default file path), a logger (to log when a result has been
--- written), and a MonadIO (to performs the access). Doesn't support accessing
--- twice the same file for now.
-interpretFileAccess
-  :: (MonadIO m)
-  => FileAccess a b
-  -> AnyRopeWith '[ '("options",GetOpt), '("logger",Logger) ] '[Arrow, HasKleisli m] a b
-interpretFileAccess (ReadFile name ext) =
-  getStrOpt ("read-"<>name) ("File to read "<>name<>" from") (Just $ name<>"."<>ext)
-  >>> liftKleisliIO BS.readFile
-interpretFileAccess (WriteFile name ext) = proc content -> do
-  realPath <- getStrOpt ("write-"<>name) ("File to write "<>name<>" to") (Just (name<>"."<>ext)) -< ()
-  liftKleisliIO id -< LBS.writeFile realPath content
-  strand #logger (Log []) -< "Wrote file "<>realPath
-
-addNS [] n = n
-addNS ns n = intercalate "-" ns <> "-" <> n
+prefixNS [] n = n
+prefixNS ns n = intercalate "-" ns <> "-" <> n
 
 -- | Turns a GetOpt into an actual optparse-applicative Parser
-interpretGetOpt :: (Arrow eff) => GetOpt a b -> Cayley Parser eff a b
-interpretGetOpt (GetOpt ns parser name docstring defVal) =
-  Cayley $ arr . const <$>
-  let (docSuffix, defValField) = case defVal of
-        Just v -> (". Default: "<>show v, value v)
-        Nothing -> ("", mempty)
-  in option parser ( long (addNS ns name) <> help (docstring<>docSuffix) <>
-                     metavar (show $ typeOf $ fromJust defVal) <> defValField )
-interpretGetOpt (Switch ns (defName,defDocstring,defVal) alts) =
-  Cayley $ arr . const <$> foldr (<|>) defFlag (map toFlag' alts)
-  where
-    defFlag = flag defVal defVal (long (addNS ns defName) <> help defDocstring)
-    toFlag' (name, docstring, val) = flag' val (long (addNS ns name) <> help docstring)
+interpretGetOpt :: (Arrow eff)
+                => GetOpt a b
+                -> Cayley (Reader Namespace) (Cayley Parser eff) a b
+                   -- ^ Given a namespace, we can construct a Parser
+interpretGetOpt (GetOpt parser name docstring defVal) =
+  Cayley $ reader $ \ns ->  -- We need the namespace as we want to prefix option
+                            -- flags with it
+    Cayley $ arr . const <$>
+      let (docSuffix, defValField) = case defVal of
+            Just v -> (". Default: "<>show v, value v)
+            Nothing -> ("", mempty)
+      in option parser ( long (prefixNS ns name) <> help (docstring<>docSuffix) <>
+                         metavar (show $ typeOf $ fromJust defVal) <> defValField )
+interpretGetOpt (Switch (defName,defDocstring,defVal) alts) =
+  Cayley $ reader $ \ns ->
+    Cayley $ arr . const <$>
+      let defFlag = flag defVal defVal (long (prefixNS ns defName) <> help defDocstring)
+          toFlag' (name, docstring, val) = flag' val (long (prefixNS ns name) <> help docstring)
+      in foldr (<|>) defFlag (map toFlag' alts)
 
 
 --- * THE PIPELINE
@@ -257,7 +252,7 @@ vanderpol mu =
 -- | Solve a specific model. To do so, requires an "ode" strand.
 solveVanderpol :: AnyRopeWith
   '[ '("ode", SimulateODE), '("files", FileAccess), '("options", GetOpt) ]
-  '[Arrow] () (L.Matrix Double)
+  '[Arrow, WithNamespacing] () (L.Matrix Double)
 solveVanderpol = proc () -> do
   odeModel <- appToArrow $
     vanderpol <$> getOptA "mu" "µ parameter" (Just 2) -< ()
@@ -278,23 +273,50 @@ pipeline = withODEStrand "vanderpol" solveVanderpol
 --- * END OF PIPELINE
 
 
--- | The core effect we need to collect all our options and build the
--- corresponding CLI Parser, and hold the store for caching.
-type CoreEff = Cayley Parser (Kleisli (ReaderT CS.ContentStore IO))
+-- | The core effect we need.
+--
+-- It looks complicated but is actually completely equivalent to:
+-- CoreEff a b = Namespace -> Parser (CS.ContentStore -> a -> IO b)
+type CoreEff = Cayley (Reader Namespace)  -- Get the namespace we are in
+                 (Cayley Parser  -- Get the CLI options, whose name is
+                                 -- conditionned on the current namespace
+                    (Kleisli  -- Kleisli is the frontier between load time and runtime
+                       (ReaderT CS.ContentStore -- Get the content store, to
+                                                -- cache computation at runtime
+                          IO)))
 
 instance WithCaching CoreEff where
   cache c = mapKleisli $ \act i -> do
     store <- ask
     CS.cacheKleisliIO (Just 1) c Remote.NoCache store act i
 
+-- | Weave a FileAccess into any rope with our CoreEff that can access options
+-- (to give the option to rebind the default file path), a logger (to log when a
+-- result has been written), and a MonadIO (to performs the access). Needs the
+-- namespace to know the default paths to which we should write the files.
+interpretFileAccess
+  :: (AllInMantle '[ '("options",GetOpt), '("logger",Logger) ] mantle CoreEff)
+  => FileAccess a b
+  -> LooseRope mantle CoreEff a b
+interpretFileAccess (ReadFile name ext) =
+  getStrOpt ("read-"<>name) ("File to read "<>name<>" from") (Just $ name<>"."<>ext)
+  >>> liftKleisliIO BS.readFile
+interpretFileAccess (WriteFile name ext) = proc content -> do
+  realPath <- getStrOpt ("write-"<>name) ("File to write "<>name<>" to") (Just (name<>"."<>ext)) -< ()
+  liftKleisliIO id -< LBS.writeFile realPath content
+  strand #logger Log -< "Wrote file "<>realPath
+
+
 main :: IO ()
 main = do
-  let Cayley pipelineParser =
+  let Cayley namespacedPipelineParser =
           pipeline & loosen
             & entwine  #files   (.interpretFileAccess)
+               -- #files must go first because it needs #logger and #options
             & entwine_ #logger  interpretLogger
             & entwine_ #options interpretGetOpt
             & untwine
+      Cayley pipelineParser = runReader namespacedPipelineParser []
   Kleisli runPipeline <- execParser $ info (helper <*> pipelineParser) $
          header "A kernmantle pipeline solving a biomodel"
   CS.withStore [absdir|/home/yves/_store|] $ runReaderT $ runPipeline ()
