@@ -48,6 +48,9 @@ import           Numeric.Sundials.Types
 
 import qualified Graphics.Vega.VegaLite as VL
 
+import System.Directory (createDirectoryIfMissing)
+import System.FilePath (takeDirectory)
+
 
 type ODESystem = Double -> [Double] -> [Double]
   -- ^ The RHS of the system, taking absolute time in input (useful if our
@@ -215,8 +218,31 @@ interpretLogger Log =
                             -- want to print in which namespace it was logged
     liftKleisliIO $ putStrLn . (intercalate "." ns <> ">> "++)
 
-prefixNS [] n = n
-prefixNS ns n = intercalate "-" ns <> "-" <> n
+-- | Adds a namespace prefix to a String, with some separator
+prefixNS :: Namespace -> String -> String -> String
+prefixNS [] _ n = n
+prefixNS ns sep n = intercalate sep ns <> sep <> n
+
+-- | Weave a FileAccess into any rope with our CoreEff that can access options
+-- (to give the option to rebind the default file path), a logger (to log when a
+-- result has been written), and a MonadIO (to performs the access). Needs the
+-- namespace to know the default paths to which we should write the files.
+interpretFileAccess
+  :: (MonadIO m)
+  => Namespace  -- ^ Will be used as folders
+  -> FileAccess a b
+  -> AnyRopeWith '[ '("options",GetOpt), '("logger",Logger) ] '[Arrow, HasKleisli m] a b
+interpretFileAccess ns (ReadFile name ext) =
+  getStrOpt ("read-"<>name) ("File to read "<>name<>" from")
+                            (Just $ prefixNS ns "/" name<>"."<>ext)
+  >>> liftKleisliIO BS.readFile
+interpretFileAccess ns (WriteFile name ext) = proc content -> do
+  realPath <- getStrOpt ("write-"<>name) ("File to write "<>name<>" to")
+                                         (Just $ prefixNS ns "/" name<>"."<>ext) -< ()
+  liftKleisliIO id -< do
+    createDirectoryIfMissing True $ takeDirectory realPath
+    LBS.writeFile realPath content
+  strand #logger Log -< "Wrote file "<>realPath
 
 -- | Turns a GetOpt into an actual optparse-applicative Parser
 interpretGetOpt :: (Arrow eff)
@@ -230,13 +256,13 @@ interpretGetOpt (GetOpt parser name docstring defVal) =
       let (docSuffix, defValField) = case defVal of
             Just v -> (". Default: "<>show v, value v)
             Nothing -> ("", mempty)
-      in option parser ( long (prefixNS ns name) <> help (docstring<>docSuffix) <>
+      in option parser ( long (prefixNS ns "-" name) <> help (docstring<>docSuffix) <>
                          metavar (show $ typeOf $ fromJust defVal) <> defValField )
 interpretGetOpt (Switch (defName,defDocstring,defVal) alts) =
   Cayley $ reader $ \ns ->
     Cayley $ arr . const <$>
-      let defFlag = flag defVal defVal (long (prefixNS ns defName) <> help defDocstring)
-          toFlag' (name, docstring, val) = flag' val (long (prefixNS ns name) <> help docstring)
+      let defFlag = flag defVal defVal (long (prefixNS ns "-" defName) <> help defDocstring)
+          toFlag' (name, docstring, val) = flag' val (long (prefixNS ns "-" name) <> help docstring)
       in foldr (<|>) defFlag (map toFlag' alts)
 
 
@@ -290,28 +316,15 @@ instance WithCaching CoreEff where
     store <- ask
     CS.cacheKleisliIO (Just 1) c Remote.NoCache store act i
 
--- | Weave a FileAccess into any rope with our CoreEff that can access options
--- (to give the option to rebind the default file path), a logger (to log when a
--- result has been written), and a MonadIO (to performs the access). Needs the
--- namespace to know the default paths to which we should write the files.
-interpretFileAccess
-  :: (AllInMantle '[ '("options",GetOpt), '("logger",Logger) ] mantle CoreEff)
-  => FileAccess a b
-  -> LooseRope mantle CoreEff a b
-interpretFileAccess (ReadFile name ext) =
-  getStrOpt ("read-"<>name) ("File to read "<>name<>" from") (Just $ name<>"."<>ext)
-  >>> liftKleisliIO BS.readFile
-interpretFileAccess (WriteFile name ext) = proc content -> do
-  realPath <- getStrOpt ("write-"<>name) ("File to write "<>name<>" to") (Just (name<>"."<>ext)) -< ()
-  liftKleisliIO id -< LBS.writeFile realPath content
-  strand #logger Log -< "Wrote file "<>realPath
-
-
+-- | We need to get the namespace to invoke 'interpretFileAccess'
 main :: IO ()
 main = do
-  let Cayley namespacedPipelineParser =
+  let interpretFileAccess' toCore fileAccessEffect =
+        Cayley $ reader $ \ns ->
+          runReader (runCayley $ toCore $ interpretFileAccess ns fileAccessEffect) ns
+      Cayley namespacedPipelineParser =
           pipeline & loosen
-            & entwine  #files   (.interpretFileAccess)
+            & entwine  #files   interpretFileAccess'
                -- #files must go first because it needs #logger and #options
             & entwine_ #logger  interpretLogger
             & entwine_ #options interpretGetOpt
