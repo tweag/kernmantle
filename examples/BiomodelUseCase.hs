@@ -210,23 +210,26 @@ withODEStrand modelName =
   tighten . entwine #ode (.interpretSimulateODE) . loosen
     -- We interpret SimulateODE effects coming from that rope
 
+-- | Builds a namespace prefix, with some beginning, separator and ending. If
+-- namespace is empty, returns the empty string.
+nsPrefix :: Namespace -> String -> String -> String -> String
+nsPrefix [] _ _ _ = ""
+nsPrefix ns beg sep end = beg <> intercalate sep ns <> end
+
 -- | Run a Console effect in any effect that can access a namespace and Kleisli m where m is a
 -- MonadIO
 interpretLogger :: (HasKleisliIO m eff) => Logger a b -> Cayley (Reader Namespace) eff a b
 interpretLogger Log =
   Cayley $ reader $ \ns ->  -- We need the namespace as for each line logged, we
                             -- want to print in which namespace it was logged
-    liftKleisliIO $ putStrLn . (intercalate "." ns <> ">> "++)
-
--- | Adds a namespace prefix to a String, with some separator
-prefixNS :: Namespace -> String -> String -> String
-prefixNS [] _ n = n
-prefixNS ns sep n = intercalate sep ns <> sep <> n
+    liftKleisliIO $ putStrLn . (nsPrefix ns "" "." ">> "<>)
 
 -- | Weave a FileAccess into any rope with our CoreEff that can access options
 -- (to give the option to rebind the default file path), a logger (to log when a
--- result has been written), and a MonadIO (to performs the access). Needs the
--- namespace to know the default paths to which we should write the files.
+-- result has been written), and a MonadIO (to performs the access).
+--
+-- Needs the namespace to know the default paths to which we should write/read
+-- the files. When writing, creates the directory tree if some are missing.
 interpretFileAccess
   :: (MonadIO m)
   => Namespace  -- ^ Will be used as folders
@@ -234,17 +237,19 @@ interpretFileAccess
   -> AnyRopeWith '[ '("options",GetOpt), '("logger",Logger) ] '[Arrow, HasKleisli m] a b
 interpretFileAccess ns (ReadFile name ext) =
   getStrOpt ("read-"<>name) ("File to read "<>name<>" from")
-                            (Just $ prefixNS ns "/" name<>"."<>ext)
-  >>> liftKleisliIO BS.readFile
+                            (Just $ nsPrefix ns "" "/" "/" <> name<>"."<>ext)
+  >>>
+  liftKleisliIO BS.readFile
 interpretFileAccess ns (WriteFile name ext) = proc content -> do
   realPath <- getStrOpt ("write-"<>name) ("File to write "<>name<>" to")
-                                         (Just $ prefixNS ns "/" name<>"."<>ext) -< ()
+                                         (Just $ nsPrefix ns "" "/" "/" <> name<>"."<>ext) -< ()
   liftKleisliIO id -< do
     createDirectoryIfMissing True $ takeDirectory realPath
     LBS.writeFile realPath content
   strand #logger Log -< "Wrote file "<>realPath
 
--- | Turns a GetOpt into an actual optparse-applicative Parser
+-- | Given a Namespace to generate CLI flag names, turns a GetOpt into an actual
+-- optparse-applicative Parser
 interpretGetOpt :: (Arrow eff)
                 => GetOpt a b
                 -> Cayley (Reader Namespace) (Cayley Parser eff) a b
@@ -256,13 +261,18 @@ interpretGetOpt (GetOpt parser name docstring defVal) =
       let (docSuffix, defValField) = case defVal of
             Just v -> (". Default: "<>show v, value v)
             Nothing -> ("", mempty)
-      in option parser ( long (prefixNS ns "-" name) <> help (docstring<>docSuffix) <>
-                         metavar (show $ typeOf $ fromJust defVal) <> defValField )
+      in option parser (   long (nsPrefix ns "" "-" "-" <> name)
+                        <> help (nsPrefix ns "In " "." ": "<>docstring<>docSuffix)
+                        <> metavar (show $ typeOf $ fromJust defVal) <> defValField )
 interpretGetOpt (Switch (defName,defDocstring,defVal) alts) =
   Cayley $ reader $ \ns ->
     Cayley $ arr . const <$>
-      let defFlag = flag defVal defVal (long (prefixNS ns "-" defName) <> help defDocstring)
-          toFlag' (name, docstring, val) = flag' val (long (prefixNS ns "-" name) <> help docstring)
+      let defFlag =
+            flag defVal defVal (   long (nsPrefix ns "" "-" "-" <> defName)
+                                <> help defDocstring )
+          toFlag' (name, docstring, val) =
+            flag' val (   long (nsPrefix ns "" "-" "-" <> name)
+                       <> help docstring )
       in foldr (<|>) defFlag (map toFlag' alts)
 
 
@@ -278,7 +288,8 @@ vanderpol mu =
 -- | Solve a specific model. To do so, requires an "ode" strand.
 solveVanderpol :: AnyRopeWith
   '[ '("ode", SimulateODE), '("files", FileAccess), '("options", GetOpt) ]
-  '[Arrow, WithNamespacing] () (L.Matrix Double)
+  '[Arrow]
+  () (L.Matrix Double)
 solveVanderpol = proc () -> do
   odeModel <- appToArrow $
     vanderpol <$> getOptA "mu" "µ parameter" (Just 2) -< ()
@@ -294,7 +305,11 @@ solveVanderpol = proc () -> do
       -- model's variables
 
 -- | The final pipeline to run
-pipeline = withODEStrand "vanderpol" solveVanderpol
+pipeline = proc () -> do
+  strand #logger Log -< "Beginning pipeline"
+  withODEStrand "vanderpol" solveVanderpol -< ()
+  withODEStrand "glycolysis" solveVanderpol -< ()
+  strand #logger Log -< "Pipeline finished"
 
 --- * END OF PIPELINE
 
