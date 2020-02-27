@@ -16,11 +16,13 @@
 --
 -- - creates an 'ODEModel' type
 -- - describes a vanderpol model as an 'ODEModel'
--- - builds a pipeline exposing to the user the parameters of this model
+-- - describes a simple chemical equation as a 'ChemicalModel'
+-- - builds a pipeline exposing to the user the parameters of these models
 --   and of the solver
--- - solves the model, caching the results
--- - writes the result as a CSV file to a parameterizable file
--- - generates a vega lite visualisation of the result
+-- - converts the chemical model to an 'ODEModel'
+-- - solves the models, caching the results
+-- - writes the results as CSV files (paths are exposed via CLI options)
+-- - generates vega lite visualisations of the results
 --
 -- More generally this examples shows how to use kernmantle effects to
 -- build all these features.
@@ -100,56 +102,61 @@ instance (Monad m, CS.ContentHashable m params) => CS.ContentHashable m (ODEMode
 type Element = String
 
 -- | A dynamical system determined by a chemical reaction.
-data ChemicalSystem = ChemicalSystem
-  { -- | The left side of the chemical reaction.
-    chemicalLeft :: M.Map Element Int
-  , -- | The right side of the chemical reaction.
-    chemicalRight :: M.Map Element Int
+data ChemicalModel = ChemicalModel
+  { -- | The left-hand side of the chemical reaction.
+    chemicalLeft      :: M.Map Element Int
+    -- | The right-hand side of the chemical reaction.
+  , chemicalRight     :: M.Map Element Int
+    -- | The initial quantities (in moles) of each element
+  , chemicalInitConds :: M.Map Element Double
+    -- | The identity of the system, for hashing purposes
+  , chemicalModelId   :: String
   } deriving (Show)
 
 -- | Change the direction of arrows for the chemical reaction system.
-reverseChemicalSystem :: ChemicalSystem -> ChemicalSystem
-reverseChemicalSystem (ChemicalSystem l r) = ChemicalSystem r l
-
--- | Convert a chemical system into a differential equation system for the
--- quantity of each element. This uses an unitary velocity from left to right.
-fromChemicalSystem :: ChemicalSystem -> ODESystem
-fromChemicalSystem (ChemicalSystem l r) =
-  let
-    m :: M.Map Element (Int,Int)
-    m =
-      M.unionWith
-        (\(x1,y1) (x2,y2) -> (x1 + x2, y1 + y2))
-        (fmap (\x -> (x,0)) l)
-        (fmap (\y -> (0,y)) r)
-
-    v :: [Double]
-    v = M.elems $ fmap (\(i,o) -> fromIntegral (o - i)) m
-
-    keys :: [Element]
-    keys = M.keys m
-
-    system :: [Double] -> Double
-    system xs =
-      let
-        is = fmap fst m
-        -- this assumes that variables are in aphabetical order
-        qs = M.fromAscList $ zipWith (,) keys xs
-        fact n = fromIntegral $ product [1..n]
-        term i q = q ** fromIntegral i / fromIntegral (fact i)
-      in
-        product (M.intersectionWith term is qs)
-  in
-    \_t xs -> fmap (* system xs) v
+reverseChemicalModel :: ChemicalModel -> ChemicalModel
+reverseChemicalModel cm@(ChemicalModel {chemicalLeft=l, chemicalRight=r}) =
+  cm {chemicalLeft=r, chemicalRight=l}
 
 -- | Given reaction velocities in each sense, convert a chemical system into a
 -- differential equation system for the quantity of each element.
-fromChemicalSystemLR :: Double -> Double -> ChemicalSystem -> ODESystem
-fromChemicalSystemLR lr rl s = \t xs ->
-  zipWith combine (fromChemicalSystem s t xs) (fromChemicalSystem r t xs)
+chemicalToODEModel :: Double -> Double -> ChemicalModel -> ODEModel (Double,Double)
+chemicalToODEModel lr rl s = ODEModel { odeSystem = odeSystem
+                                      , odeVarNames = map T.pack vars
+                                      , odeInitConds = ics
+                                      , odeParams = (lr,rl)
+                                      , odeModelId = chemicalModelId s }
   where
+    (vars, ics) = unzip $ M.toList $ M.intersectionWith (\_ ic -> ic)
+      (M.union (chemicalLeft s) (chemicalRight s))
+      (chemicalInitConds s)
+    
+    odeSystem _t xs =
+      zipWith combine (go s xs)
+                      (go (reverseChemicalModel s) xs)
+
     combine x y = lr * x + rl * y
-    r = reverseChemicalSystem s
+    
+    system m xs = product (M.intersectionWith term is qs)
+      where
+        keys = M.keys m
+        is = fmap fst m
+            -- this assumes that variables are in aphabetical order
+        qs = M.fromAscList $ zipWith (,) keys xs
+        fact n = fromIntegral $ product [1..n]
+        term i q = q ** fromIntegral i / fromIntegral (fact i)
+
+    go (ChemicalModel{chemicalLeft=l, chemicalRight=r}) xs = fmap (* system m xs) v
+      where
+        m :: M.Map Element (Int,Int)
+        m =
+          M.unionWith
+          (\(x1,y1) (x2,y2) -> (x1 + x2, y1 + y2))
+          (fmap (\x -> (x,0)) l)
+          (fmap (\y -> (0,y)) r)
+
+        v :: [Double]
+        v = M.elems $ fmap (\(i,o) -> fromIntegral (o - i)) m
 
 --------------------------------------------------------------------------------
 -- Example models
@@ -377,7 +384,7 @@ interpretGetOpt (Switch (defName,defDocstring,defVal) alts) =
 --------------------------------------------------------------------------------
 -- Pipeline definition
 
--- | The vanderpol model
+-- | The vanderpol 'ODEModel'
 vanderpol :: Double -> ODEModel Double
 vanderpol mu =
   ODEModel (\_t [x,v] -> [v, -x + mu * v * (1-x*x)])
@@ -386,32 +393,22 @@ vanderpol mu =
            mu
            "vanderpol0.1"
 
-chemical :: Double -> ODEModel Double
-chemical k =
-  let
-    odeSystem = fromChemicalSystemLR k (k/2)
-      ChemicalSystem
-        { chemicalLeft = M.fromList [("H20",1)]
-        , chemicalRight = M.fromList [("H+",2),("O-",1)]
-        }
-  in
-    ODEModel
-      odeSystem
-      ["H+","H20","O-"] -- this has to be in alphabetical order for the moment
-      [0,1,0]
-      k
-      "chemical"
+-- | A simple chemical equation, which we turn into an 'ODEModel'
+chemical :: Double  -- ^ Reaction rate
+         -> ODEModel (Double,Double)
+chemical k = chemicalToODEModel k (k/2) $
+  ChemicalModel (M.fromList [("H20",1)])
+                (M.fromList [("H+",2), ("O-",1)])
+                (M.fromList [("H20",1), ("H+",0), ("O-",0)])
+                "chemical0.1"
 
 -- | Solve a specific model. To do so, requires an "ode" strand.
-solve ::
-     (Double -> ODEModel Double)
-  -> AnyRopeWith
-     '[ '("ode", SimulateODE), '("files", FileAccess), '("options", GetOpt) ]
-     '[Arrow]
-     () (L.Matrix Double)
-solve model = proc () -> do
-  odeModel <- appToArrow $
-    model <$> getOptA "mu" "µ parameter" (Just 2) -< ()
+solveODEModel
+  :: (CS.ContentHashable Identity p)
+  => AnyRopeWith '[ '("ode", SimulateODE), '("files", FileAccess), '("options", GetOpt) ]
+                 '[Arrow]
+     (ODEModel p) (L.Matrix Double)
+solveODEModel = proc odeModel -> do
   res <- strand #ode $ SimulateODE -< odeModel
   strand #files $ WriteFile "res" "csv" -< mkHeader (odeVarNames odeModel) <> encodeMatrix res
   viz <- genViz -< (odeModel, res)
@@ -428,9 +425,12 @@ solve model = proc () -> do
 -- options or files conflicting (thanks to namespaces)
 pipeline = proc () -> do
   strand #logger Log -< "Beginning pipeline"
-  addToNamespace "vanderpol" (solve vanderpol) -< ()
-  addToNamespace "chemical" (solve chemical) -< ()
-    -- We reuse vanderpol until we have coded the real glycolysis model
+  addToNamespace "vanderpol" $
+    getOpt "mu" "µ parameter" (Just 2)
+    >>> arr vanderpol >>> solveODEModel -< ()
+  addToNamespace "chemical" $
+    getOpt "k" "K reaction rate" (Just 2)
+    >>> arr chemical >>> solveODEModel    -< ()
   strand #logger Log -< "Pipeline finished"
 
 --- * END OF PIPELINE
