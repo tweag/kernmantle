@@ -35,7 +35,7 @@ import Prelude hiding (id, (.))
 import Control.Kernmantle.Rope
 import Control.Arrow
 import Control.Category
-import Control.DeepSeq (($!!))
+import Control.DeepSeq (deepseq)
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Reader
 import qualified Data.CAS.ContentHashable as CS
@@ -322,8 +322,6 @@ interpretSimulateODE (SimulateODE mdl) = proc params -> do
     -< ()
   -- Finally we can solve the system:
   cache (CS.defaultCacherWithIdent 1123) doSolve -< (mdl{odeInitConds=ics},params,times,solvingAlg)
-    -- We need to convert to and from list as L.Matrix is not directly
-    -- serializable via a Store instance
   where
     mkHeader vars = LTE.encodeUtf8 $ LT.fromStrict $
       "Time," <> T.intercalate "," vars <> "\r\n"
@@ -331,7 +329,7 @@ interpretSimulateODE (SimulateODE mdl) = proc params -> do
       strand #logger Log -< "Start solving"
       let timeVec = expandSolTimes times
           resMtx = solveWith solvingAlg (odeSystem mdl params) (odeInitConds mdl) timeVec
-      strand #logger Log -< "Done solving"
+      strand #logger Log -< resMtx `deepseq` "Done solving"
       strand #files $ WriteFile "res" "csv" -<
         mkHeader (odeVarNames mdl) <> encodeMatrix (L.asColumn timeVec L.||| resMtx)
         -- We write the time vector as first column in the CSV
