@@ -46,7 +46,9 @@ import Data.Functor.Identity (Identity)
 import Data.Functor.Compose
 import Data.List (intercalate)
 import Data.Maybe (fromJust)
+import Data.Profunctor
 import Data.Profunctor.Cayley
+import Data.Store (Store)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as LT
 import qualified Data.Text.Lazy.Encoding as LTE
@@ -83,14 +85,20 @@ type InitConds = [Double]
   -- ^ Initial conditions. Should have the same length than the inputs of the
   -- 'ODESystem'
 
-data ODEModel params = ODEModel
-  { odeSystem :: params -> ODESystem
-  , odeVarNames :: [T.Text]
-  , odeInitConds :: InitConds
-  , odeModelId :: String } -- The id is used for caching purposes (as the
-                           -- ODESystem isn't hashable)
+data ODEModel params result = ODEModel
+  { odeSystem :: params -> ODESystem  -- ^ Given the model params, build an ODESystem
+  , odePostProcess :: L.Matrix Double -> result
+      -- ^ Given the solving results (with first column being time), compute the
+      -- final result
+  , odeVarNames :: [T.Text]  -- ^ Names of the variables (and of the columns of the matrix)
+  , odeInitConds :: InitConds -- ^ Initial values of the variables
+  , odeModelId :: String -- ^ And identifier used for caching purposes
+  }
+instance Profunctor ODEModel where
+  dimap f g mdl = mdl{odeSystem = \p -> odeSystem mdl (f p)
+                     ,odePostProcess = g . odePostProcess mdl}
 -- | The hash takes into account the model Id and initial conditions
-instance (Monad m) => CS.ContentHashable m (ODEModel params) where
+instance (Monad m) => CS.ContentHashable m (ODEModel params a) where
   contentHashUpdate ctx mdl =
     CS.contentHashUpdate ctx (odeInitConds mdl, odeModelId mdl)
 
@@ -119,9 +127,13 @@ reverseChemicalModel cm@(ChemicalModel {chemicalLeft=l, chemicalRight=r}) =
 
 -- | Given reaction velocities in each sense, convert a chemical system into a
 -- differential equation system for the quantity of each element.
-chemicalToODEModel :: (p -> (Double,Double)) -> ChemicalModel -> ODEModel p
-chemicalToODEModel getRates chemMdl =
+--
+-- The model parameters are the reaction rates (from left to right and from
+-- right to left)
+chemicalToODEModel :: ChemicalModel -> ODEModel (Double,Double) (L.Matrix Double)
+chemicalToODEModel chemMdl =
   ODEModel { odeSystem = odeSystem
+           , odePostProcess = id
            , odeVarNames = map T.pack vars
            , odeInitConds = ics
            , odeModelId = chemicalModelId chemMdl }
@@ -130,11 +142,10 @@ chemicalToODEModel getRates chemMdl =
       (M.union (chemicalLeft chemMdl) (chemicalRight chemMdl))
       (chemicalInitConds chemMdl)
     
-    odeSystem params _t xs =
+    odeSystem (lr,rl) _t xs =
       zipWith combine (go chemMdl xs)
                       (go (reverseChemicalModel chemMdl) xs)
       where
-        (lr,rl) = getRates params
         combine x y = lr * x + rl * y
     
     system m xs = product (M.intersectionWith term is qs)
@@ -166,9 +177,10 @@ chemicalToODEModel getRates chemMdl =
 
 -- | An effect to simulate an ODE system
 data SimulateODE a b where
-  SimulateODE :: (CS.ContentHashable Identity p)  -- We'll hash the model for caching purposes
-              => ODEModel p
-              -> SimulateODE p (L.Matrix Double)
+  SimulateODE :: (CS.ContentHashable Identity p, Store r)
+                 -- We'll hash the model and serialize its result for caching purposes
+              => ODEModel p r
+              -> SimulateODE p r
     -- ^ Given a model of N variables to solve, simulates it and returns a
     -- matrix with N+1 columns, first column being the time steps
 
@@ -244,17 +256,17 @@ appToArrow (ArrowMonad a) = a
 genViz :: AnyRopeWith
   '[ '("options", GetOpt) ]
   '[Arrow]
-   (ODEModel p, L.Matrix Double) VL.VegaLite
-genViz = proc (model, mtx) -> do
+   ([T.Text], L.Matrix Double) VL.VegaLite
+genViz = proc (colNames, mtx) -> do
   let
     timeCol:varCols = L.toColumns mtx
     dat = VL.dataFromColumns []
       . VL.dataColumn "Time" (VL.Numbers $ L.toList timeCol)
       . foldr (.) id
         (map (\(cn,ys) -> VL.dataColumn cn (VL.Numbers $ L.toList ys)) $
-             zip (odeVarNames model) varCols)
+             zip colNames varCols)
     trans = VL.transform
-      . VL.foldAs (odeVarNames model) "Variable" "Value"
+      . VL.foldAs colNames "Variable" "Value"
         -- Creates two new columns for each variable of the model, so we can use
         -- the variable name and value resp. for color encoding and Y-position
         -- encoding
@@ -290,7 +302,7 @@ expandSolTimes st =
 -- GetOpt effect.
 interpretSimulateODE
   :: SimulateODE a b
-  -> AnyRopeWith '[ '("options", GetOpt), '("logger",Logger) ] '[Arrow, WithCaching] a b
+  -> AnyRopeWith '[ '("options", GetOpt), '("logger",Logger), '("files",FileAccess) ] '[Arrow, WithCaching] a b
 -- | Solve an ODE model in any Rope that has a GetOpt effect
 interpretSimulateODE (SimulateODE mdl) = proc params -> do
   -- We ask for an override of the initial conditions:
@@ -306,10 +318,12 @@ interpretSimulateODE (SimulateODE mdl) = proc params -> do
     [("ark", "Solve with ARKode algorithm. See https://computing.llnl.gov/projects/sundials/arkode", ARKode)]
     -< ()
   -- Finally we can solve the system:
-  arr L.fromLists . cache (CS.defaultCacherWithIdent 1123) solve -< (mdl{odeInitConds=ics},params,times,solvingAlg)
+  cache (CS.defaultCacherWithIdent 1123) solve -< (mdl{odeInitConds=ics},params,times,solvingAlg)
     -- We need to convert to and from list as L.Matrix is not directly
     -- serializable via a Store instance
   where
+    mkHeader vars = LTE.encodeUtf8 $ LT.fromStrict $
+      "Time," <> T.intercalate "," vars <> "\r\n"
     solve = proc (mdl,params,times,solvingAlg) -> do
       strand #logger Log -< "Start solving"
       let resMtx = solveWith solvingAlg (odeSystem mdl params) (odeInitConds mdl) (expandSolTimes times)
@@ -317,7 +331,10 @@ interpretSimulateODE (SimulateODE mdl) = proc params -> do
           -- We concat the time vector as the first column of the result matrix
           -- before returning it
       strand #logger Log -< "Done solving"
-      returnA -< L.toLists resMtxWithTimeCol
+      strand #files $ WriteFile "res" "csv" -< mkHeader (odeVarNames mdl) <> encodeMatrix resMtxWithTimeCol
+      viz <- genViz -< (odeVarNames mdl, resMtxWithTimeCol)
+      strand #files $ WriteFile "viz" "html" -< LTE.encodeUtf8 $ VL.toHtml $ viz
+      returnA -< odePostProcess mdl resMtxWithTimeCol
 
 -- | Builds a namespace prefix, with some beginning, separator and ending. If
 -- namespace is empty, returns the empty string.
@@ -388,52 +405,42 @@ interpretGetOpt (Switch (defName,defDocstring,defVal) alts) =
 -- Pipeline definition
 
 -- | The vanderpol 'ODEModel'
-vanderpol :: ODEModel Double
+vanderpol :: ODEModel Double ()
 vanderpol =
   ODEModel (\mu _t [x,v] -> [v, -x + mu * v * (1-x*x)])
+           (const ())  -- We don't want any post-processing
            ["x","v"]
            [1,0]
            "vanderpol0.1"
 
 -- | A simple chemical equation, which we turn into an 'ODEModel'
-chemical :: ODEModel Double  -- Input param is the reaction rate
-chemical = chemicalToODEModel (\k -> (k, k/2)) $
-  ChemicalModel (M.fromList [("H20",1)])
-                (M.fromList [("H+",2), ("O-",1)])
-                (M.fromList [("H20",1), ("H+",0), ("O-",0)])
-                "chemical0.1"
-
--- | Solve a specific model. To do so, requires an "ode" strand.
-solveODEModel
-  :: (CS.ContentHashable Identity p)
-  => ODEModel p
-  -> AnyRopeWith '[ '("ode", SimulateODE), '("files", FileAccess), '("options", GetOpt) ]
-                 '[Arrow]
-     p (L.Matrix Double)
-solveODEModel odeModel = proc params -> do
-  res <- strand #ode $ SimulateODE odeModel -< params
-  strand #files $ WriteFile "res" "csv" -< mkHeader (odeVarNames odeModel) <> encodeMatrix res
-  viz <- genViz -< (odeModel, res)
-  strand #files $ WriteFile "viz" "html" -< LTE.encodeUtf8 $ VL.toHtml $ viz
-  returnA -< res
-  where
-    mkHeader vars = LTE.encodeUtf8 $ LT.fromStrict $
-      "Time," <> T.intercalate "," vars <> "\r\n"
-      -- SimulateODE result first column will always be Time, other columns are
-      -- model's variables
+chemical :: ODEModel Double ()
+chemical =  -- Input param is the reaction rate and we don't want post-processing
+  dimap (\k -> (k, k/2)) (const ()) $
+    chemicalToODEModel $
+      ChemicalModel (M.fromList [("H20",1)])
+                    (M.fromList [("H+",2), ("O-",1)])
+                    (M.fromList [("H20",1), ("H+",0), ("O-",0)])
+                    "chemical0.1"
 
 -- | The final pipeline to run. It solves two models to show that the same
 -- tooling can be used to solve 2 models in the same pipeline with no risks of
 -- options or files conflicting (thanks to namespaces)
-pipeline = proc () -> do
-  strand #logger Log -< "Beginning pipeline"
-  addToNamespace "vanderpol" $
-    getOpt "mu" "µ parameter" (Just 2)
-    >>> solveODEModel vanderpol -< ()
-  addToNamespace "chemical" $
-    getOpt "k" "K reaction rate" (Just 2)
-    >>> solveODEModel chemical -< ()
-  strand #logger Log -< "Pipeline finished"
+pipeline =
+  log "Beginning pipeline"
+  >>>
+  addToNamespace "vanderpol"
+    (getOpt "mu" "µ parameter" (Just 2)
+     >>>
+     strand #ode (SimulateODE vanderpol))
+  >>> 
+  addToNamespace "chemical"
+    (getOpt "k" "Left-to-right reaction rate" (Just 2)
+     >>>
+     strand #ode (SimulateODE chemical))
+  >>>
+  log "Pipeline finished"
+  where log s = arr (const s) >>> strand #logger Log
 
 --- * END OF PIPELINE
 
