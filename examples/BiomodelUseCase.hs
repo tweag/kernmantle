@@ -38,6 +38,7 @@ import Control.Category
 import Control.DeepSeq (deepseq)
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Reader
+import Control.Monad.Trans.Writer.Strict
 import qualified Data.CAS.ContentHashable as CS
 import qualified Data.CAS.ContentStore as CS
 import qualified Data.CAS.RemoteCache as Remote
@@ -188,15 +189,17 @@ data SimulateODE a b where
 -- | An effect to ask for some parameter's value
 data GetOpt a b where
   -- | Get a raw string option
-  GetOpt :: (Show b, Typeable b) -- So we can show the default value and its
-                                 -- type
+  GetOpt :: (Show b, Typeable b, CS.ContentHashable Identity b)
+             -- So we can show the default value and its type, and add the
+             -- selected value to the cache context
          => ReadM b  -- ^ How to parse the option
          -> String  -- ^ Name
          -> String  -- ^ Docstring
          -> Maybe b  -- ^ Default value
          -> GetOpt a b  -- ^ Returns final value
   -- | Ask to select between alternatives
-  Switch :: (String, String, b) -- ^ Name and docstring of default
+  Switch :: (CS.ContentHashable Identity b)
+         => (String, String, b) -- ^ Name and docstring of default
          -> [(String, String, b)]
             -- ^ Names and docstrings of alternatives
          -> GetOpt a b
@@ -214,31 +217,38 @@ data FileAccess a b where
 data Logger a b where
   Log :: Logger String ()
 
+data SomeHashable where
+  SomeHashable ::
+    (CS.ContentHashable Identity a) => a -> SomeHashable
+instance CS.ContentHashable Identity SomeHashable where
+  contentHashUpdate ctx (SomeHashable a) = CS.contentHashUpdate ctx a
+type CacheContext = [SomeHashable]
+
 -- | An class to cache part of the pipeline
-class WithCaching eff where
-  cache :: CS.Cacher a b -> eff a b -> eff a b
+class Cacheable eff where
+  caching :: CS.Cacher (CacheContext,a) b -> eff a b -> eff a b
 
 -- | Any core that has caching provides it to the rope:
-instance (WithCaching core) => WithCaching (Rope r m core) where
-  cache = mapRopeCore . cache
+instance (Cacheable core) => Cacheable (Rope r m core) where
+  caching = mapRopeCore . caching
 
 -- | Used by option parser and logger, to know where the option and line to log
 -- comes from
 type Namespace = [String]
 
 -- | If an effect can hold a namespace.
-class WithNamespacing eff where
+class Namespaced eff where
   -- | Add an element to the namespace
   addToNamespace :: String -> eff a b -> eff a b
 
 -- | How to add a namespace to tasks in a Rope. Several effects require to be
 -- interpreted in some @Cayley (Reader Namespace)@ because they need a namespace
 -- to construct their effects
-instance WithNamespacing (Cayley (Reader Namespace) eff) where
+instance Namespaced (Cayley (Reader Namespace) eff) where
   addToNamespace n (Cayley eff) = Cayley (local (++[n]) eff)
 
 -- | Any rope whose core has namespacing has namespacing too
-instance (WithNamespacing core) => WithNamespacing (Rope r m core) where
+instance (Namespaced core) => Namespaced (Rope r m core) where
   addToNamespace = mapRopeCore . addToNamespace
 
 -- | For options parsed by IsString class
@@ -305,7 +315,8 @@ expandSolTimes st =
 -- determined by the current namespace).
 interpretSimulateODE
   :: SimulateODE a b
-  -> AnyRopeWith '[ '("options", GetOpt), '("logger",Logger), '("files",FileAccess) ] '[Arrow, WithCaching] a b
+  -> AnyRopeWith '[ '("options", GetOpt), '("logger",Logger), '("files",FileAccess) ]
+                 '[Arrow] a b
 -- | Solve an ODE model in any Rope that has a GetOpt effect
 interpretSimulateODE (SimulateODE mdl) = proc params -> do
   -- We ask for an override of the initial conditions:
@@ -321,21 +332,19 @@ interpretSimulateODE (SimulateODE mdl) = proc params -> do
     [("ark", "Solve with ARKode algorithm. See https://computing.llnl.gov/projects/sundials/arkode", ARKode)]
     -< ()
   -- Finally we can solve the system:
-  cache (CS.defaultCacherWithIdent 1123) doSolve -< (mdl{odeInitConds=ics},params,times,solvingAlg)
+  strand #logger Log -< "Start solving"
+  let timeVec = expandSolTimes times
+      resMtx = solveWith solvingAlg (odeSystem mdl params) ics timeVec
+  strand #logger Log -< resMtx `deepseq` "Done solving"
+  strand #files $ WriteFile "res" "csv" -<
+    mkHeader (odeVarNames mdl) <> encodeMatrix (L.asColumn timeVec L.||| resMtx)
+  -- We write the time vector as first column in the CSV
+  viz <- genViz -< (timeVec, odeVarNames mdl, resMtx)
+  strand #files $ WriteFile "viz" "html" -< LTE.encodeUtf8 $ VL.toHtml $ viz
+  returnA -< odePostProcess mdl timeVec resMtx
   where
     mkHeader vars = LTE.encodeUtf8 $ LT.fromStrict $
       "Time," <> T.intercalate "," vars <> "\r\n"
-    doSolve = proc (mdl,params,times,solvingAlg) -> do
-      strand #logger Log -< "Start solving"
-      let timeVec = expandSolTimes times
-          resMtx = solveWith solvingAlg (odeSystem mdl params) (odeInitConds mdl) timeVec
-      strand #logger Log -< resMtx `deepseq` "Done solving"
-      strand #files $ WriteFile "res" "csv" -<
-        mkHeader (odeVarNames mdl) <> encodeMatrix (L.asColumn timeVec L.||| resMtx)
-        -- We write the time vector as first column in the CSV
-      viz <- genViz -< (timeVec, odeVarNames mdl, resMtx)
-      strand #files $ WriteFile "viz" "html" -< LTE.encodeUtf8 $ VL.toHtml $ viz
-      returnA -< odePostProcess mdl timeVec resMtx
 
 -- | Builds a namespace prefix, with some beginning, separator and ending. If
 -- namespace is empty, returns the empty string.
@@ -345,7 +354,8 @@ nsPrefix ns beg sep end = beg <> intercalate sep ns <> end
 
 -- | Run a Console effect in any effect that can access a namespace and Kleisli m where m is a
 -- MonadIO
-interpretLogger :: (HasKleisliIO m eff) => Logger a b -> Cayley (Reader Namespace) eff a b
+interpretLogger :: (HasKleisliIO m eff)
+                => Logger a b -> Cayley (Reader Namespace) eff a b
 interpretLogger Log =
   Cayley $ reader $ \ns ->  -- We need the namespace as for each line logged, we
                             -- want to print in which namespace it was logged
@@ -374,33 +384,6 @@ interpretFileAccess ns (WriteFile name ext) = proc content -> do
     createDirectoryIfMissing True $ takeDirectory realPath
     LBS.writeFile realPath content
   strand #logger Log -< "Wrote file "<>realPath
-
--- | Given a Namespace to generate CLI flag names, turns a GetOpt into an actual
--- optparse-applicative Parser
-interpretGetOpt :: (Arrow eff)
-                => GetOpt a b
-                -> Cayley (Reader Namespace) (Cayley Parser eff) a b
-                   -- ^ Given a namespace, we can construct a Parser
-interpretGetOpt (GetOpt parser name docstring defVal) =
-  Cayley $ reader $ \ns ->  -- We need the namespace as we want to prefix option
-                            -- flags with it
-    Cayley $ arr . const <$>
-      let (docSuffix, defValField) = case defVal of
-            Just v -> (". Default: "<>show v, value v)
-            Nothing -> ("", mempty)
-      in option parser (   long (nsPrefix ns "" "-" "-" <> name)
-                        <> help (nsPrefix ns "In " "." ": "<>docstring<>docSuffix)
-                        <> metavar (show $ typeOf $ fromJust defVal) <> defValField )
-interpretGetOpt (Switch (defName,defDocstring,defVal) alts) =
-  Cayley $ reader $ \ns ->
-    Cayley $ arr . const <$>
-      let defFlag =
-            flag defVal defVal (   long (nsPrefix ns "" "-" "-" <> defName)
-                                <> help (nsPrefix ns "In " "." ": "<> defDocstring) )
-          toFlag' (name, docstring, val) =
-            flag' val (   long (nsPrefix ns "" "-" "-" <> name)
-                       <> help (nsPrefix ns "In " "." ": "<>docstring) )
-      in foldr (<|>) defFlag (map toFlag' alts)
 
 --------------------------------------------------------------------------------
 -- Pipeline definition
@@ -433,38 +416,94 @@ pipeline =
   addToNamespace "vanderpol"
     (getOpt "mu" "µ parameter" (Just 2)
      >>>
-     strand #ode (SimulateODE vanderpol))
+     caching (CS.defaultCacherWithIdent 1000)
+       -- Any option, any change as to where to write simulation results will
+       -- invalidate the cache, and make the content of the 'caching' block to
+       -- be re-executed
+       (strand #ode (SimulateODE vanderpol)))
   >>> 
   addToNamespace "chemical"
     (getOpt "k" "Left-to-right reaction rate" (Just 2)
      >>>
-     strand #ode (SimulateODE chemical))
+     caching (CS.defaultCacherWithIdent 1001)
+       (strand #ode (SimulateODE chemical)))
   >>>
   log "Pipeline finished"
   where log s = arr (const s) >>> strand #logger Log
 
 --- * END OF PIPELINE
 
+--------------------------------------------------------------------------------
+-- Pipeline interpretation
 
 -- | The core effect we need.
 --
 -- It looks complicated but is actually completely equivalent to:
--- CoreEff a b = Namespace -> Parser (a -> CS.ContentStore -> IO b)
-type CoreEff = Cayley (Reader Namespace)  -- Get the namespace we are in
-                 (Cayley Parser  -- Get the CLI options, whose name is
-                                 -- conditionned on the current namespace
-                    (Kleisli  -- Kleisli is the frontier between load time and runtime
-                       (ReaderT CS.ContentStore -- Get the content store, to
-                                                -- cache computation at runtime
-                          IO)))
+-- CoreEff a b = Namespace -> Parser (CacheContext, a -> CS.ContentStore -> IO b)
+type CoreEff =
+  -- These three first layers run when we load the pipeline, they will be
+  -- stripped before execution:
+  Cayley (Reader Namespace)  -- Get the namespace we are in
+    (Cayley Parser  -- Get the CLI options, whose name is conditionned on the
+                    -- current namespace
+      (Cayley (Writer CacheContext) -- Accumulate the context needed to know
+                                    -- what to take into account to perform
+                                    -- caching
+        -- The following layers are the ones that actually run when we
+        -- execute the pipeline:
+        (Kleisli  -- Kleisli is the frontier between load time and runtime
+          (ReaderT CS.ContentStore -- Get the content store, to cache
+                                   -- computation at runtime
+            IO))))
 
-instance WithCaching CoreEff where
-  cache c = mapKleisli $ \act i -> do
-    store <- ask
-    CS.cacheKleisliIO (Just 1) c Remote.NoCache store act i
+-- | Creates a Writer that builds the action that returns the chosen option
+-- value when the pipeline runs AND populates the 'CacheContext'
+reportCacheContext opt =
+  Cayley $ writer (arr $ const opt, [SomeHashable opt])
 
---------------------------------------------------------------------------------
--- Pipeline interpretation
+-- | Given a Namespace to generate CLI flag names, turns a GetOpt into an actual
+-- optparse-applicative Parser, and adds the value of the option given by the
+-- user to the CacheContext
+--
+-- interpretGetOpt is the only weaver that needs access to basically every layer
+-- of CoreEff.
+interpretGetOpt :: GetOpt a b
+                -> CoreEff a b
+interpretGetOpt (GetOpt parser name docstring defVal) =
+  Cayley $ reader $ \ns ->  -- We need the namespace as we want to prefix option
+                            -- flags with it
+    Cayley $ reportCacheContext <$>
+      let (docSuffix, defValField) = case defVal of
+            Just v -> (". Default: "<>show v, value v)
+            Nothing -> ("", mempty)
+      in option parser (   long (nsPrefix ns "" "-" "-" <> name)
+                        <> help (nsPrefix ns "In " "." ": "<>docstring<>docSuffix)
+                        <> metavar (show $ typeOf $ fromJust defVal) <> defValField )
+interpretGetOpt (Switch (defName,defDocstring,defVal) alts) =
+  Cayley $ reader $ \ns ->
+    Cayley $ reportCacheContext <$>
+      let defFlag =
+            flag defVal defVal (   long (nsPrefix ns "" "-" "-" <> defName)
+                                <> help (nsPrefix ns "In " "." ": "<> defDocstring) )
+          toFlag' (name, docstring, val) =
+            flag' val (   long (nsPrefix ns "" "-" "-" <> name)
+                       <> help (nsPrefix ns "In " "." ": "<>docstring) )
+      in foldr (<|>) defFlag (map toFlag' alts)
+
+-- | When we want to perform a cached task, we need to access the current
+-- CacheContext before, so we need to do some newtype juggling
+instance Cacheable CoreEff where
+  caching c = fmapC (fmapC readCacheContextAndExec)
+    where
+      fmapC g (Cayley app) = Cayley $ fmap g app
+      readCacheContextAndExec (Cayley w) =
+        Cayley $ writer $ case runWriter w of
+          (Kleisli act, cacheContext) ->
+            (Kleisli $ \i -> do
+              store <- ask
+              CS.cacheKleisliIO (Just 1) c Remote.NoCache store
+                                (act . snd) (cacheContext,i)
+            ,cacheContext)
 
 main :: IO ()
 main = do
@@ -484,7 +523,8 @@ main = do
             & entwine_ #options interpretGetOpt
             & untwine
       Cayley pipelineParser = runReader namespacedPipelineParser []
-  Kleisli runPipeline <- execParser $ info (helper <*> pipelineParser) $
+  Cayley runPipelineW <- execParser $ info (helper <*> pipelineParser) $
          header "A kernmantle pipeline solving a biomodel"
+  let Kleisli runPipeline = fst $ runWriter runPipelineW
   CS.withStore [absdir|/tmp/_store|] $ runReaderT $ runPipeline ()
   return ()
