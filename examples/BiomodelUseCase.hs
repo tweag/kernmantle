@@ -55,6 +55,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Char8 as BS8
 import GHC.Generics (Generic)
+import qualified Data.Map.Strict as M
 
 import qualified Numeric.Sundials.ARKode.ODE as ARK
 import qualified Numeric.Sundials.CVode.ODE  as CV
@@ -67,6 +68,8 @@ import Path
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeDirectory)
 
+--------------------------------------------------------------------------------
+-- ODE models
 
 type ODESystem = Double -> [Double] -> [Double]
   -- ^ The RHS of the system, taking absolute time in input (useful if our
@@ -89,6 +92,70 @@ data ODEModel params = ODEModel
 instance (Monad m, CS.ContentHashable m params) => CS.ContentHashable m (ODEModel params) where
   contentHashUpdate ctx mdl =
     CS.contentHashUpdate ctx (odeInitConds mdl, odeModelId mdl, odeParams mdl)
+
+--------------------------------------------------------------------------------
+-- Chemical models
+
+-- | The name of the chemical element
+type Element = String
+
+-- | A dynamical system determined by a chemical reaction.
+data ChemicalSystem = ChemicalSystem
+  { -- | The left side of the chemical reaction.
+    chemicalLeft :: M.Map Element Int
+  , -- | The right side of the chemical reaction.
+    chemicalRight :: M.Map Element Int
+  } deriving (Show)
+
+-- | Change the direction of arrows for the chemical reaction system.
+reverseChemicalSystem :: ChemicalSystem -> ChemicalSystem
+reverseChemicalSystem (ChemicalSystem l r) = ChemicalSystem r l
+
+-- | Convert a chemical system into a differential equation system for the
+-- quantity of each element. This uses an unitary velocity from left to right.
+fromChemicalSystem :: ChemicalSystem -> ODESystem
+fromChemicalSystem (ChemicalSystem l r) =
+  let
+    m :: M.Map Element (Int,Int)
+    m =
+      M.unionWith
+        (\(x1,y1) (x2,y2) -> (x1 + x2, y1 + y2))
+        (fmap (\x -> (x,0)) l)
+        (fmap (\y -> (0,y)) r)
+
+    v :: [Double]
+    v = M.elems $ fmap (\(i,o) -> fromIntegral (o - i)) m
+
+    keys :: [Element]
+    keys = M.keys m
+
+    system :: [Double] -> Double
+    system xs =
+      let
+        is = fmap fst m
+        -- this assumes that variables are in aphabetical order
+        qs = M.fromAscList $ zipWith (,) keys xs
+        fact n = fromIntegral $ product [1..n]
+        term i q = q ** fromIntegral i / fromIntegral (fact i)
+      in
+        product (M.intersectionWith term is qs)
+  in
+    \_t xs -> fmap (* system xs) v
+
+-- | Given reaction velocities in each sense, convert a chemical system into a
+-- differential equation system for the quantity of each element.
+fromChemicalSystemLR :: Double -> Double -> ChemicalSystem -> ODESystem
+fromChemicalSystemLR lr rl s = \t xs ->
+  zipWith combine (fromChemicalSystem s t xs) (fromChemicalSystem r t xs)
+  where
+    combine x y = lr * x + rl * y
+    r = reverseChemicalSystem s
+
+--------------------------------------------------------------------------------
+-- Example models
+
+--------------------------------------------------------------------------------
+-- Effect definition
 
 -- | An effect to simulate an ODE system
 data SimulateODE a b where
@@ -208,11 +275,15 @@ expandSolTimes :: SolTimes -> L.Vector Double
 expandSolTimes st =
   L.linspace (solTimepoints st) (solStart st, solEnd st)
 
+--------------------------------------------------------------------------------
+-- Effect interpretation
+
 -- | Solve an ODE model in any Arrow Rope that can cache computations and has a
 -- GetOpt effect.
 interpretSimulateODE
   :: SimulateODE a b
   -> AnyRopeWith '[ '("options", GetOpt), '("logger",Logger) ] '[Arrow, WithCaching] a b
+-- | Solve an ODE model in any Rope that has a GetOpt effect
 interpretSimulateODE SimulateODE = proc mdl -> do
   -- We ask for some parameters related to the simulation process:
   times <- appToArrow $ SolTimes
@@ -303,8 +374,8 @@ interpretGetOpt (Switch (defName,defDocstring,defVal) alts) =
                        <> help (nsPrefix ns "In " "." ": "<>docstring) )
       in foldr (<|>) defFlag (map toFlag' alts)
 
-
---- * THE PIPELINE
+--------------------------------------------------------------------------------
+-- Pipeline definition
 
 -- | The vanderpol model
 vanderpol :: Double -> ODEModel Double
@@ -315,14 +386,32 @@ vanderpol mu =
            mu
            "vanderpol0.1"
 
+chemical :: Double -> ODEModel Double
+chemical k =
+  let
+    odeSystem = fromChemicalSystemLR k (k/2)
+      ChemicalSystem
+        { chemicalLeft = M.fromList [("H20",1)]
+        , chemicalRight = M.fromList [("H+",2),("O-",1)]
+        }
+  in
+    ODEModel
+      odeSystem
+      ["H+","H20","O-"] -- this has to be in alphabetical order for the moment
+      [0,1,0]
+      k
+      "chemical"
+
 -- | Solve a specific model. To do so, requires an "ode" strand.
-solveVanderpol :: AnyRopeWith
-  '[ '("ode", SimulateODE), '("files", FileAccess), '("options", GetOpt) ]
-  '[Arrow]
-  () (L.Matrix Double)
-solveVanderpol = proc () -> do
+solve ::
+     (Double -> ODEModel Double)
+  -> AnyRopeWith
+     '[ '("ode", SimulateODE), '("files", FileAccess), '("options", GetOpt) ]
+     '[Arrow]
+     () (L.Matrix Double)
+solve model = proc () -> do
   odeModel <- appToArrow $
-    vanderpol <$> getOptA "mu" "µ parameter" (Just 2) -< ()
+    model <$> getOptA "mu" "µ parameter" (Just 2) -< ()
   res <- strand #ode $ SimulateODE -< odeModel
   strand #files $ WriteFile "res" "csv" -< mkHeader (odeVarNames odeModel) <> encodeMatrix res
   viz <- genViz -< (odeModel, res)
@@ -339,8 +428,8 @@ solveVanderpol = proc () -> do
 -- options or files conflicting (thanks to namespaces)
 pipeline = proc () -> do
   strand #logger Log -< "Beginning pipeline"
-  addToNamespace "vanderpol" solveVanderpol -< ()
-  addToNamespace "glycolysis" solveVanderpol -< ()
+  addToNamespace "vanderpol" (solve vanderpol) -< ()
+  addToNamespace "chemical" (solve chemical) -< ()
     -- We reuse vanderpol until we have coded the real glycolysis model
   strand #logger Log -< "Pipeline finished"
 
@@ -363,6 +452,9 @@ instance WithCaching CoreEff where
   cache c = mapKleisli $ \act i -> do
     store <- ask
     CS.cacheKleisliIO (Just 1) c Remote.NoCache store act i
+
+--------------------------------------------------------------------------------
+-- Pipeline interpretation
 
 main :: IO ()
 main = do

@@ -1,3 +1,5 @@
-{withHoogle ? true}:
+with (import ./nixpkgs.nix {
+  overlays = [(import ./overlay.nix)];
+});
 
-(import ./. {inherit withHoogle;}).shell
+(haskellPackages.callPackage ./. {}).env
