@@ -87,16 +87,16 @@ type InitConds = [Double]
 
 data ODEModel params result = ODEModel
   { odeSystem :: params -> ODESystem  -- ^ Given the model params, build an ODESystem
-  , odePostProcess :: L.Matrix Double -> result
-      -- ^ Given the solving results (with first column being time), compute the
-      -- final result
+  , odePostProcess :: L.Vector Double -> L.Matrix Double -> result
+      -- ^ Given the time steps used and the solving results (with first column
+      -- being time), compute the final result
   , odeVarNames :: [T.Text]  -- ^ Names of the variables (and of the columns of the matrix)
   , odeInitConds :: InitConds -- ^ Initial values of the variables
   , odeModelId :: String -- ^ And identifier used for caching purposes
   }
 instance Profunctor ODEModel where
   dimap f g mdl = mdl{odeSystem = \p -> odeSystem mdl (f p)
-                     ,odePostProcess = g . odePostProcess mdl}
+                     ,odePostProcess = \t m -> g (odePostProcess mdl t m)}
 -- | The hash takes into account the model Id and initial conditions
 instance (Monad m) => CS.ContentHashable m (ODEModel params a) where
   contentHashUpdate ctx mdl =
@@ -130,10 +130,11 @@ reverseChemicalModel cm@(ChemicalModel {chemicalLeft=l, chemicalRight=r}) =
 --
 -- The model parameters are the reaction rates (from left to right and from
 -- right to left)
-chemicalToODEModel :: ChemicalModel -> ODEModel (Double,Double) (L.Matrix Double)
+chemicalToODEModel :: ChemicalModel
+                   -> ODEModel (Double,Double) (L.Vector Double, L.Matrix Double)
 chemicalToODEModel chemMdl =
   ODEModel { odeSystem = odeSystem
-           , odePostProcess = id
+           , odePostProcess = (,)
            , odeVarNames = map T.pack vars
            , odeInitConds = ics
            , odeModelId = chemicalModelId chemMdl }
@@ -256,12 +257,12 @@ appToArrow (ArrowMonad a) = a
 genViz :: AnyRopeWith
   '[ '("options", GetOpt) ]
   '[Arrow]
-   ([T.Text], L.Matrix Double) VL.VegaLite
-genViz = proc (colNames, mtx) -> do
+   (L.Vector Double, [T.Text], L.Matrix Double) VL.VegaLite
+genViz = proc (timeVec, colNames, mtx) -> do
   let
-    timeCol:varCols = L.toColumns mtx
+    varCols = L.toColumns mtx
     dat = VL.dataFromColumns []
-      . VL.dataColumn "Time" (VL.Numbers $ L.toList timeCol)
+      . VL.dataColumn "Time" (VL.Numbers $ L.toList timeVec)
       . foldr (.) id
         (map (\(cn,ys) -> VL.dataColumn cn (VL.Numbers $ L.toList ys)) $
              zip colNames varCols)
@@ -298,15 +299,17 @@ expandSolTimes st =
 --------------------------------------------------------------------------------
 -- Effect interpretation
 
--- | Solve an ODE model in any Arrow Rope that can cache computations and has a
--- GetOpt effect.
+-- | Solve an ODE model in any Arrow Rope that can cache computations, get
+-- options, do logging and write files. Writes the results to csv files and
+-- their vega-lite visualizations to html files (the folder to write in will be
+-- determined by the current namespace).
 interpretSimulateODE
   :: SimulateODE a b
   -> AnyRopeWith '[ '("options", GetOpt), '("logger",Logger), '("files",FileAccess) ] '[Arrow, WithCaching] a b
 -- | Solve an ODE model in any Rope that has a GetOpt effect
 interpretSimulateODE (SimulateODE mdl) = proc params -> do
   -- We ask for an override of the initial conditions:
-  ics <- getOpt "ics" ("Initial conditions of variables "++show (odeVarNames mdl)) (Just $ odeInitConds mdl) -< ()
+  ics <- getOpt "ics" ("Initial conditions for variables "++show (odeVarNames mdl)) (Just $ odeInitConds mdl) -< ()
   -- We ask for some parameters related to the simulation process:
   times <- appToArrow $ SolTimes
     <$> getOptA "start" "T0 of simulation" (Just 0)
@@ -318,23 +321,23 @@ interpretSimulateODE (SimulateODE mdl) = proc params -> do
     [("ark", "Solve with ARKode algorithm. See https://computing.llnl.gov/projects/sundials/arkode", ARKode)]
     -< ()
   -- Finally we can solve the system:
-  cache (CS.defaultCacherWithIdent 1123) solve -< (mdl{odeInitConds=ics},params,times,solvingAlg)
+  cache (CS.defaultCacherWithIdent 1123) doSolve -< (mdl{odeInitConds=ics},params,times,solvingAlg)
     -- We need to convert to and from list as L.Matrix is not directly
     -- serializable via a Store instance
   where
     mkHeader vars = LTE.encodeUtf8 $ LT.fromStrict $
       "Time," <> T.intercalate "," vars <> "\r\n"
-    solve = proc (mdl,params,times,solvingAlg) -> do
+    doSolve = proc (mdl,params,times,solvingAlg) -> do
       strand #logger Log -< "Start solving"
-      let resMtx = solveWith solvingAlg (odeSystem mdl params) (odeInitConds mdl) (expandSolTimes times)
-          resMtxWithTimeCol = L.asColumn (expandSolTimes times) L.||| resMtx
-          -- We concat the time vector as the first column of the result matrix
-          -- before returning it
+      let timeVec = expandSolTimes times
+          resMtx = solveWith solvingAlg (odeSystem mdl params) (odeInitConds mdl) timeVec
       strand #logger Log -< "Done solving"
-      strand #files $ WriteFile "res" "csv" -< mkHeader (odeVarNames mdl) <> encodeMatrix resMtxWithTimeCol
-      viz <- genViz -< (odeVarNames mdl, resMtxWithTimeCol)
+      strand #files $ WriteFile "res" "csv" -<
+        mkHeader (odeVarNames mdl) <> encodeMatrix (L.asColumn timeVec L.||| resMtx)
+        -- We write the time vector as first column in the CSV
+      viz <- genViz -< (timeVec, odeVarNames mdl, resMtx)
       strand #files $ WriteFile "viz" "html" -< LTE.encodeUtf8 $ VL.toHtml $ viz
-      returnA -< odePostProcess mdl resMtxWithTimeCol
+      returnA -< odePostProcess mdl timeVec resMtx
 
 -- | Builds a namespace prefix, with some beginning, separator and ending. If
 -- namespace is empty, returns the empty string.
@@ -408,7 +411,7 @@ interpretGetOpt (Switch (defName,defDocstring,defVal) alts) =
 vanderpol :: ODEModel Double ()
 vanderpol =
   ODEModel (\mu _t [x,v] -> [v, -x + mu * v * (1-x*x)])
-           (const ())  -- We don't want any post-processing
+           (\_ _ -> ())  -- We don't want any post-processing
            ["x","v"]
            [1,0]
            "vanderpol0.1"
@@ -448,7 +451,7 @@ pipeline =
 -- | The core effect we need.
 --
 -- It looks complicated but is actually completely equivalent to:
--- CoreEff a b = Namespace -> Parser (CS.ContentStore -> a -> IO b)
+-- CoreEff a b = Namespace -> Parser (a -> CS.ContentStore -> IO b)
 type CoreEff = Cayley (Reader Namespace)  -- Get the namespace we are in
                  (Cayley Parser  -- Get the CLI options, whose name is
                                  -- conditionned on the current namespace
