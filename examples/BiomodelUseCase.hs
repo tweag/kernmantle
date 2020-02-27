@@ -14,12 +14,12 @@
 
 -- | This example:
 --
--- - creates an 'ODEModel' type
--- - describes a vanderpol model as an 'ODEModel'
+-- - creates an 'ODESolving' type
+-- - describes a vanderpol model as an 'ODESolving'
 -- - describes a simple chemical equation as a 'ChemicalModel'
 -- - builds a pipeline exposing to the user the parameters of these models
 --   and of the solver
--- - converts the chemical model to an 'ODEModel'
+-- - converts the chemical model to an 'ODESolving'
 -- - solves the models, caching the results
 -- - writes the results as CSV files (paths are exposed via CLI options)
 -- - generates vega lite visualisations of the results
@@ -28,7 +28,7 @@
 -- build all these features.
 --
 -- All the pipeline primitives present in this file are generic,
--- they could be reused as-is for different 'ODEModel's. See 'pipeline'.
+-- they could be reused as-is for different 'ODESolving's. See 'pipeline'.
 
 import Prelude hiding (id, (.))
 
@@ -86,22 +86,18 @@ type InitConds = [Double]
   -- ^ Initial conditions. Should have the same length than the inputs of the
   -- 'ODESystem'
 
-data ODEModel params result = ODEModel
+-- | Our first effect: an ODE model to solve
+data ODESolving params result = ODESolving
   { odeSystem :: params -> ODESystem  -- ^ Given the model params, build an ODESystem
   , odePostProcess :: L.Vector Double -> L.Matrix Double -> result
       -- ^ Given the time steps used and the solving results (with first column
       -- being time), compute the final result
   , odeVarNames :: [T.Text]  -- ^ Names of the variables (and of the columns of the matrix)
   , odeInitConds :: InitConds -- ^ Initial values of the variables
-  , odeModelId :: String -- ^ And identifier used for caching purposes
   }
-instance Profunctor ODEModel where
+instance Profunctor ODESolving where
   dimap f g mdl = mdl{odeSystem = \p -> odeSystem mdl (f p)
                      ,odePostProcess = \t m -> g (odePostProcess mdl t m)}
--- | The hash takes into account the model Id and initial conditions
-instance (Monad m) => CS.ContentHashable m (ODEModel params a) where
-  contentHashUpdate ctx mdl =
-    CS.contentHashUpdate ctx (odeInitConds mdl, odeModelId mdl)
 
 --------------------------------------------------------------------------------
 -- Chemical models
@@ -117,8 +113,6 @@ data ChemicalModel = ChemicalModel
   , chemicalRight     :: M.Map Element Int
     -- | The initial quantities (in moles) of each element
   , chemicalInitConds :: M.Map Element Double
-    -- | The identity of the system, for hashing purposes
-  , chemicalModelId   :: String
   } deriving (Show)
 
 -- | Change the direction of arrows for the chemical reaction system.
@@ -131,14 +125,13 @@ reverseChemicalModel cm@(ChemicalModel {chemicalLeft=l, chemicalRight=r}) =
 --
 -- The model parameters are the reaction rates (from left to right and from
 -- right to left)
-chemicalToODEModel :: ChemicalModel
-                   -> ODEModel (Double,Double) (L.Vector Double, L.Matrix Double)
-chemicalToODEModel chemMdl =
-  ODEModel { odeSystem = odeSystem
-           , odePostProcess = (,)
-           , odeVarNames = map T.pack vars
-           , odeInitConds = ics
-           , odeModelId = chemicalModelId chemMdl }
+chemicalToODESolving :: ChemicalModel
+                     -> ODESolving (Double,Double) (L.Vector Double, L.Matrix Double)
+chemicalToODESolving chemMdl =
+  ODESolving { odeSystem = odeSystem
+             , odePostProcess = (,)
+             , odeVarNames = map T.pack vars
+             , odeInitConds = ics }
   where
     (vars, ics) = unzip $ M.toList $ M.intersectionWith (\_ ic -> ic)
       (M.union (chemicalLeft chemMdl) (chemicalRight chemMdl))
@@ -172,19 +165,7 @@ chemicalToODEModel chemMdl =
         v = M.elems $ fmap (\(i,o) -> fromIntegral (o - i)) m
 
 --------------------------------------------------------------------------------
--- Example models
-
---------------------------------------------------------------------------------
 -- Effect definition
-
--- | An effect to simulate an ODE system
-data SimulateODE a b where
-  SimulateODE :: (CS.ContentHashable Identity p, Store r)
-                 -- We'll hash the model and serialize its result for caching purposes
-              => ODEModel p r
-              -> SimulateODE p r
-    -- ^ Given a model of N variables to solve, simulates it and returns a
-    -- matrix with N+1 columns, first column being the time steps
 
 -- | An effect to ask for some parameter's value
 data GetOpt a b where
@@ -222,11 +203,11 @@ data SomeHashable where
     (CS.ContentHashable Identity a) => a -> SomeHashable
 instance CS.ContentHashable Identity SomeHashable where
   contentHashUpdate ctx (SomeHashable a) = CS.contentHashUpdate ctx a
-type CacheContext = [SomeHashable]
+type CachingContext = [SomeHashable]
 
 -- | An class to cache part of the pipeline
 class Cacheable eff where
-  caching :: CS.Cacher (CacheContext,a) b -> eff a b -> eff a b
+  caching :: CS.Cacher (CachingContext,a) b -> eff a b -> eff a b
 
 -- | Any core that has caching provides it to the rope:
 instance (Cacheable core) => Cacheable (Rope r m core) where
@@ -293,7 +274,6 @@ data SolTimes = SolTimes { solStart      :: Double
                          , solEnd        :: Double
                          , solTimepoints :: Int }
   deriving (Generic)
-instance (Monad m) => CS.ContentHashable m SolTimes
 
 data ODESolvingAlgorithm = CVode | ARKode
   deriving (Show, Generic)
@@ -313,12 +293,12 @@ expandSolTimes st =
 -- options, do logging and write files. Writes the results to csv files and
 -- their vega-lite visualizations to html files (the folder to write in will be
 -- determined by the current namespace).
-interpretSimulateODE
-  :: SimulateODE a b
+interpretODESolving
+  :: ODESolving a b
   -> AnyRopeWith '[ '("options", GetOpt), '("logger",Logger), '("files",FileAccess) ]
                  '[Arrow] a b
 -- | Solve an ODE model in any Rope that has a GetOpt effect
-interpretSimulateODE (SimulateODE mdl) = proc params -> do
+interpretODESolving mdl = proc params -> do
   -- We ask for an override of the initial conditions:
   ics <- getOpt "ics" ("Initial conditions for variables "++show (odeVarNames mdl)) (Just $ odeInitConds mdl) -< ()
   -- We ask for some parameters related to the simulation process:
@@ -388,24 +368,22 @@ interpretFileAccess ns (WriteFile name ext) = proc content -> do
 --------------------------------------------------------------------------------
 -- Pipeline definition
 
--- | The vanderpol 'ODEModel'
-vanderpol :: ODEModel Double ()
+-- | The vanderpol 'ODESolving'
+vanderpol :: ODESolving Double ()
 vanderpol =
-  ODEModel (\mu _t [x,v] -> [v, -x + mu * v * (1-x*x)])
-           (\_ _ -> ())  -- We don't want any post-processing
-           ["x","v"]
-           [1,0]
-           "vanderpol0.1"
+  ODESolving (\mu _t [x,v] -> [v, -x + mu * v * (1-x*x)])
+             (\_ _ -> ())  -- We don't want any post-processing
+             ["x","v"]
+             [1,0]
 
--- | A simple chemical equation, which we turn into an 'ODEModel'
-chemical :: ODEModel Double ()
+-- | A simple chemical equation, which we turn into an 'ODESolving'
+chemical :: ODESolving Double ()
 chemical =  -- Input param is the reaction rate and we don't want post-processing
   dimap (\k -> (k, k/2)) (const ()) $
-    chemicalToODEModel $
+    chemicalToODESolving $
       ChemicalModel (M.fromList [("H20",1)])
                     (M.fromList [("H+",2), ("O-",1)])
                     (M.fromList [("H20",1), ("H+",0), ("O-",0)])
-                    "chemical0.1"
 
 -- | The final pipeline to run. It solves two models to show that the same
 -- tooling can be used to solve 2 models in the same pipeline with no risks of
@@ -420,13 +398,13 @@ pipeline =
        -- Any option, any change as to where to write simulation results will
        -- invalidate the cache, and make the content of the 'caching' block to
        -- be re-executed
-       (strand #ode (SimulateODE vanderpol)))
+       (strand #ode vanderpol))
   >>> 
   addToNamespace "chemical"
     (getOpt "k" "Left-to-right reaction rate" (Just 2)
      >>>
      caching (CS.defaultCacherWithIdent 1001)
-       (strand #ode (SimulateODE chemical)))
+       (strand #ode chemical))
   >>>
   log "Pipeline finished"
   where log s = arr (const s) >>> strand #logger Log
@@ -439,14 +417,14 @@ pipeline =
 -- | The core effect we need.
 --
 -- It looks complicated but is actually completely equivalent to:
--- CoreEff a b = Namespace -> Parser (CacheContext, a -> CS.ContentStore -> IO b)
+-- CoreEff a b = Namespace -> Parser (CachingContext, a -> CS.ContentStore -> IO b)
 type CoreEff =
   -- These three first layers run when we load the pipeline, they will be
   -- stripped before execution:
   Cayley (Reader Namespace)  -- Get the namespace we are in
     (Cayley Parser  -- Get the CLI options, whose name is conditionned on the
                     -- current namespace
-      (Cayley (Writer CacheContext) -- Accumulate the context needed to know
+      (Cayley (Writer CachingContext) -- Accumulate the context needed to know
                                     -- what to take into account to perform
                                     -- caching
         -- The following layers are the ones that actually run when we
@@ -457,13 +435,13 @@ type CoreEff =
             IO))))
 
 -- | Creates a Writer that builds the action that returns the chosen option
--- value when the pipeline runs AND populates the 'CacheContext'
-reportCacheContext opt =
+-- value when the pipeline runs AND populates the 'CachingContext'
+reportCachingContext opt =
   Cayley $ writer (arr $ const opt, [SomeHashable opt])
 
 -- | Given a Namespace to generate CLI flag names, turns a GetOpt into an actual
 -- optparse-applicative Parser, and adds the value of the option given by the
--- user to the CacheContext
+-- user to the CachingContext
 --
 -- interpretGetOpt is the only weaver that needs access to basically every layer
 -- of CoreEff.
@@ -472,7 +450,7 @@ interpretGetOpt :: GetOpt a b
 interpretGetOpt (GetOpt parser name docstring defVal) =
   Cayley $ reader $ \ns ->  -- We need the namespace as we want to prefix option
                             -- flags with it
-    Cayley $ reportCacheContext <$>
+    Cayley $ reportCachingContext <$>
       let (docSuffix, defValField) = case defVal of
             Just v -> (". Default: "<>show v, value v)
             Nothing -> ("", mempty)
@@ -481,7 +459,7 @@ interpretGetOpt (GetOpt parser name docstring defVal) =
                         <> metavar (show $ typeOf $ fromJust defVal) <> defValField )
 interpretGetOpt (Switch (defName,defDocstring,defVal) alts) =
   Cayley $ reader $ \ns ->
-    Cayley $ reportCacheContext <$>
+    Cayley $ reportCachingContext <$>
       let defFlag =
             flag defVal defVal (   long (nsPrefix ns "" "-" "-" <> defName)
                                 <> help (nsPrefix ns "In " "." ": "<> defDocstring) )
@@ -491,19 +469,19 @@ interpretGetOpt (Switch (defName,defDocstring,defVal) alts) =
       in foldr (<|>) defFlag (map toFlag' alts)
 
 -- | When we want to perform a cached task, we need to access the current
--- CacheContext before, so we need to do some newtype juggling
+-- CachingContext before, so we need to do some newtype juggling
 instance Cacheable CoreEff where
-  caching c = fmapC (fmapC readCacheContextAndExec)
+  caching c = fmapC (fmapC readCachingContextAndExec)
     where
       fmapC g (Cayley app) = Cayley $ fmap g app
-      readCacheContextAndExec (Cayley w) =
+      readCachingContextAndExec (Cayley w) =
         Cayley $ writer $ case runWriter w of
-          (Kleisli act, cacheContext) ->
+          (Kleisli act, cachingContext) ->
             (Kleisli $ \i -> do
               store <- ask
               CS.cacheKleisliIO (Just 1) c Remote.NoCache store
-                                (act . snd) (cacheContext,i)
-            ,cacheContext)
+                                (act . snd) (cachingContext,i)
+            ,cachingContext)
 
 main :: IO ()
 main = do
@@ -513,8 +491,8 @@ main = do
           runReader (runCayley $ toCore $ interpretFileAccess ns fileAccessEffect) ns
       Cayley namespacedPipelineParser =
           pipeline & loosen
-            & entwine  #ode     (.interpretSimulateODE)
-               -- interpretSimulateODE needs #logger and #options, so it must be
+            & entwine  #ode     (.interpretODESolving)
+               -- interpretODESolving needs #logger and #options, so it must be
                -- entwined before them
             & entwine  #files   interpretFileAccess'
                -- interpretFileAccess needs #logger and #options, so it must be
