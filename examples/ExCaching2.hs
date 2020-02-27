@@ -137,4 +137,4 @@ main = do
     Kleisli runPipeline <- execParser $ info (helper <*> pipelineParser) $
          header "A kernmantle pipeline with caching"
       <> progDesc "Does the same than exCaching, but caching is done with a class"
-    CS.withStore [absdir|/home/yves/_store|] $ runReaderT $ runPipeline ()
+    CS.withStore [absdir|/tmp/_store|] $ runReaderT $ runPipeline ()

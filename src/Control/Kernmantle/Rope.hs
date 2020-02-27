@@ -41,7 +41,10 @@ module Control.Kernmantle.Rope
   , Strand
   , StrandName
   , StrandEff
-  , InRope (..)
+  , InRope
+  , AllInMantle
+  , strand
+  , mapStrand
   , liftKleisli
   , liftKleisliIO
   , mapKleisli
@@ -55,11 +58,13 @@ module Control.Kernmantle.Rope
   , entwineEffFunctors
     -- * Predicates
   , AnyRopeWith
+  , TightRopeWith
+  , LooseRopeWith
   , Entwines
   , SatisfiesAll
   , SieveTrans (..)
   , HasKleisli
-  , HasMonadIO
+  , HasKleisliIO
     -- * Reexports
   , type (:->)
   , Label, fromLabel
@@ -69,6 +74,7 @@ where
 
 import Control.Category
 import Control.Arrow
+import Control.Lens (over)
 import Data.Bifunctor
 import Data.Biapplicative
 import Data.Bifunctor.Tannen
@@ -130,16 +136,22 @@ type TightRope = Rope ARec
 -- 'Strand's.
 type LooseRope = Rope Rec
 
-class InRope l eff rope where
-  -- | Lifts a binary effect in the 'Rope'. Performance should be better with a
-  -- 'TightRope' than with a 'LooseRope', unless you have very few 'Strand's.
-  strand :: Label l -> eff :-> rope
+-- | Tells that a strand of effects '(l,eff) is present in the rope
+type family InRope l eff rope where
+  InRope l eff (Rope record mantle core) =
+    ( HasField record l mantle mantle eff eff
+    , RecElemFCtx record (Weaver core) )
 
-instance ( HasField record l mantle mantle eff eff
-         , RecElemFCtx record (Weaver core) )
-  => InRope l eff (Rope record mantle core) where
-  strand l eff = mkRope $ \r -> weaveStrand (rgetf l r) eff
-  {-# INLINE strand #-}
+strand :: (InRope l eff (Rope r m c))
+       => Label l -> eff :-> Rope r m c
+strand l eff = mkRope $ \r -> weaveStrand (rgetf l r) eff
+{-# INLINE strand #-}
+
+mapStrand :: (InRope l eff (Rope r m c))
+          => Label l -> (eff :-> eff) -> Rope r m c :-> Rope r m c
+mapStrand l f rope =
+  mkRope $ runRope rope . over (rlensfL l) (\(Weaver w) -> Weaver $ w . f)
+{-# INLINE mapStrand #-}
 
 -- | Tells whether a collection of @strands@ is in a 'Rope'.
 type family rope `Entwines` (strands::[Strand]) :: Constraint where
@@ -155,9 +167,27 @@ type family (x::k) `SatisfiesAll` (csts::[k -> Constraint]) :: Constraint where
 -- | A @AnyRopeWith strands costraints@ is a 'Rope' with contains the strands
 -- in the variable @strands@ , and whose core effect obeys the constraints in
 -- the @contraints@ variable.
-type AnyRopeWith strands coreConstraints a b = forall s r c.
-  (Rope r s c `Entwines` strands, c `SatisfiesAll` coreConstraints)
-  => Rope r s c a b
+type AnyRopeWith strands coreConstraints a b = forall mantle r core.
+  (Rope r mantle core `Entwines` strands, core `SatisfiesAll` coreConstraints)
+  => Rope r mantle core a b
+
+type TightRopeWith strands coreConstraints a b = forall mantle core.
+  (TightRope mantle core `Entwines` strands, core `SatisfiesAll` coreConstraints)
+  => TightRope mantle core a b
+
+type LooseRopeWith strands coreConstraints a b = forall mantle core.
+  (LooseRope mantle core `Entwines` strands, core `SatisfiesAll` coreConstraints)
+  => LooseRope mantle core a b
+
+-- | Useful for functions that want to use tighten/loosen
+type AllInMantle strands mantle core =
+  ( NatToInt (RLength mantle)
+  , RecApplicative mantle
+  , RPureConstrained (IndexableField mantle) mantle
+  , LooseRope mantle core `Entwines` strands
+  , TightRope mantle core `Entwines` strands )
+  -- vinyl constraints make it so we have to repeat the Entwines constraint, as
+  -- we need it for both tight and loose ropes here
 
 -- | Turn a 'LooseRope' into a 'TightRope'
 tighten :: (RecApplicative m, RPureConstrained (IndexableField m) m)

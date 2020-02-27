@@ -17,7 +17,7 @@ import Prelude hiding (id, (.), readFile, writeFile)
 import Control.Kernmantle.Rope
   ( AnyRopeWith
   , HasKleisli (..)
-  , HasMonadIO (..)
+  , HasKleisliIO (..)
   , entwine
   , entwine_
   , untwine
@@ -142,7 +142,7 @@ pipeline = proc () -> do
 -- of effects have been evaluated. It can be pretty general, as long as in the
 -- bottom it allows us to access some IO monad. Note that @CoreEff a b = Parser
 -- (a -> IO b)@ if eff is just @Kleisli IO@
-type CoreEff a b = forall eff m. (HasMonadIO eff m) => Cayley Parser eff a b
+type CoreEff a b = forall eff m. (HasKleisliIO m eff) => Cayley Parser eff a b
 
 -- | Turns a GetOpt into an actual optparse-applicative Parser
 interpretGetOpt :: GetOpt a b -> CoreEff a b
@@ -178,7 +178,7 @@ interpretCached store runRope (CachedOp cacher f) =
 
 main :: IO ()
 main =
-  CS.withStore [absdir|/home/yves/_store|] $ \store -> do
+  CS.withStore [absdir|/tmp/_store|] $ \store -> do
     let Cayley pipelineParser =
           pipeline & loosen
               -- Order matters here: since interpretCached needs to run the full
