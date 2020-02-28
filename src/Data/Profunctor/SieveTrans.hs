@@ -5,8 +5,10 @@
 {-# LANGUAGE ConstraintKinds        #-}
 {-# LANGUAGE FlexibleContexts       #-}
 {-# LANGUAGE TypeOperators          #-}
-{-# LANGUAGE PolyKinds              #-}
 {-# LANGUAGE RankNTypes             #-}
+
+-- | SieveTrans exposes the SieveTrans class and some Sieve transformer based on
+-- usual Reader and Writer
 
 module Data.Profunctor.SieveTrans where
 
@@ -15,6 +17,9 @@ import Control.Monad.IO.Class
 import Data.Bifunctor.Tannen
 import Data.Profunctor
 import Data.Profunctor.Cayley
+
+import qualified Control.Monad.Trans.Reader as R
+import qualified Control.Monad.Trans.Writer.Strict as W
 
 
 -- | A general version of 'MonadIO' for profunctors and categories
@@ -72,74 +77,66 @@ liftKleisliIO f = liftKleisli $ liftIO . f
 {-# INLINE liftKleisliIO #-}
 
 
--- | An equivalent of ($) over type applications
-type (~>) (f::k->k') (eff::k) = f eff
+type (~>) = Cayley
 infixr 1 ~>  -- To be of a lower precedence than (:->)
 
-type Using = Cayley
-type Given a = Using ((->) a)
-type Collecting a = Using ((,) a)
-type Performing = Kleisli
+type Reader r = R.Reader r
+type Writer w = W.Writer w
 
-skipping :: (Applicative f) => eff :-> Using f eff
-skipping = Cayley . pure
-{-# INLINE skipping #-}
+fmapping :: (Functor f) => f t -> (t -> eff a b) -> (f ~> eff) a b
+fmapping a f = Cayley $ fmap f a
+{-# INLINE fmapping #-}
 
-using :: (Functor f) => f t -> (t -> eff a b) -> Using f eff a b
-using a f = Cayley $ fmap f a
-{-# INLINE using #-}
+-- | mapCayley in profunctors maps the functor. mapCayleyEff maps the effect in
+-- it.
+mapCayleyEff :: (Functor f) => (eff a b -> eff' a' b') -> (f ~> eff) a b -> (f ~> eff') a' b'
+mapCayleyEff f (Cayley eff) = Cayley $ fmap f eff
+{-# INLINE mapCayleyEff #-}
 
-use :: Cayley f eff a b -> f (eff a b)
-use (Cayley eff) = eff
-{-# INLINE use #-}
+reading :: (t -> eff a b) -> (Reader t ~> eff) a b
+reading f = Cayley $ R.reader $ f
+{-# INLINE reading #-}
 
-mapUsing :: (Functor f) => (eff a b -> eff' a' b') -> Using f eff a b -> Using f eff' a' b'
-mapUsing f (Cayley eff) = Cayley $ fmap f eff
-{-# INLINE mapUsing #-}
+mapReader :: (t -> eff a b -> eff' a' b')
+          -> (Reader t ~> eff) a b
+          -> (Reader t ~> eff') a' b'
+mapReader f (Cayley eff) = Cayley (R.reader $ \x -> f x $ R.runReader eff x)
+{-# INLINE mapReader #-}
 
-given :: (t -> eff a b) -> (Given t eff) a b
-given = Cayley
-{-# INLINE given #-}
+runReader :: t -> (Reader t ~> eff) a b -> eff a b
+runReader t (Cayley f) = R.runReader f t
+{-# INLINE runReader #-}
 
-mapGiven :: (t -> eff a b -> eff' a' b')
-         -> Given t eff a b
-         -> Given t eff' a' b'
-mapGiven f (Cayley eff) = Cayley (\x -> f x $ eff x)
-{-# INLINE mapGiven #-}
+writing :: w -> eff :-> (Writer w ~> eff)
+writing w eff = Cayley $ W.writer (eff, w)
+{-# INLINE writing #-}
 
-give :: t -> Given t eff a b -> eff a b
-give t (Cayley f) = f t
-{-# INLINE give #-}
+mapWriter :: (w -> eff a b -> (w,eff' a' b'))
+          -> (Writer w ~> eff) a b
+          -> (Writer w ~> eff') a' b'
+mapWriter f (Cayley act) = Cayley $ case W.runWriter act of
+  (eff,w) -> W.writer $ swap $ f w eff
+{-# INLINE mapWriter #-}
 
-collecting :: w -> eff :-> Collecting w eff
-collecting w eff = Cayley (w, eff)
-{-# INLINE collecting #-}
+mapWriter_ :: (w -> eff a b -> eff' a' b')
+          -> (Writer w ~> eff) a b
+          -> (Writer w ~> eff') a' b'
+mapWriter_ f = mapWriter (\w e -> (w,f w e))
+{-# INLINE mapWriter_ #-}
 
-mapCollecting :: (w -> eff a b -> eff' a' b')
-              -> Collecting w eff a b
-              -> Collecting w eff' a' b'
-mapCollecting f (Cayley (w,eff)) = Cayley (w,f w eff)
-{-# INLINE mapCollecting #-}
+runWriter :: (Writer w ~> eff) a b -> (w, eff a b)
+runWriter (Cayley eff) = swap $ W.runWriter eff
+{-# INLINE runWriter #-}
 
-collect :: Collecting w eff a b -> (w, eff a b)
-collect (Cayley t) = t
-{-# INLINE collect #-}
-
-type Performs m = HasKleisli m
-
-performing :: (Performs m eff) => (a -> m b) -> eff a b
-performing = liftKleisli
-{-# INLINE performing #-}
+swap :: (a,b) -> (b,a)
+swap (a,b) = (b,a)
+{-# INLINE swap #-}
 
 returning :: (Arrow eff) => b -> eff a b
 returning = arr . const
 {-# INLINE returning #-}
 
-mapPerforming :: (Performs m eff)
-              => ((a -> m b) -> (a' -> m b')) -> eff a b -> eff a' b'
-mapPerforming = mapKleisli
-{-# INLINE mapPerforming #-}
-
-perform :: a -> Performing m a b -> m b
+-- | Just a flipped variant of runKleisli
+perform :: a -> Kleisli m a b -> m b
 perform = flip runKleisli
 {-# INLINE perform #-}

@@ -224,9 +224,9 @@ class Namespaced eff where
 -- | How to add a namespace to tasks in a Rope. Several effects require to be
 -- interpreted in some @Cayley (Reader Namespace)@ because they need a namespace
 -- to construct their effects
-instance Namespaced (Given Namespace eff) where
-  addToNamespace n eff = given $ \ns ->
-                           give (ns++[n]) eff
+instance Namespaced (Reader Namespace ~> eff) where
+  addToNamespace n eff = reading $ \ns ->
+                           runReader (ns++[n]) eff
 
 -- | Any rope whose core has namespacing has namespacing too
 instance (Namespaced core) => Namespaced (Rope r m core) where
@@ -334,12 +334,12 @@ nsPrefix ns beg sep end = beg <> intercalate sep ns <> end
 
 -- | Run a Console effect in any effect that can access a namespace and Kleisli m where m is a
 -- MonadIO
-interpretLogger :: (Performs IO eff)
-                => Logger a b -> Given Namespace eff a b
+interpretLogger :: (HasKleisli IO eff)
+                => Logger a b -> (Reader Namespace ~> eff) a b
 interpretLogger Log =
-  given $ \ns ->  -- We need the namespace as for each line logged, we
+  reading $ \ns ->  -- We need the namespace as for each line logged, we
                             -- want to print in which namespace it was logged
-    performing $ putStrLn . (nsPrefix ns "" "." ">> "<>)
+    liftKleisli $ putStrLn . (nsPrefix ns "" "." ">> "<>)
 
 -- | Weave a FileAccess into any rope with our CoreEff that can access options
 -- (to give the option to rebind the default file path), a logger (to log when a
@@ -348,19 +348,18 @@ interpretLogger Log =
 -- Needs the namespace to know the default paths to which we should write/read
 -- the files. When writing, creates the directory tree if some are missing.
 interpretFileAccess
-  :: (MonadIO m)
-  => Namespace  -- ^ Will be used as folders
+  :: Namespace  -- ^ Will be used as folders
   -> FileAccess a b
-  -> AnyRopeWith '[ '("options",GetOpt), '("logger",Logger) ] '[Arrow, HasKleisli m] a b
+  -> AnyRopeWith '[ '("options",GetOpt), '("logger",Logger) ] '[Arrow, HasKleisli IO] a b
 interpretFileAccess ns (ReadFile name ext) =
   getStrOpt ("read-"<>name) ("File to read "<>name<>" from")
                             (Just $ nsPrefix ns "" "/" "/" <> name<>"."<>ext)
   >>>
-  liftKleisliIO BS.readFile
+  liftKleisli BS.readFile
 interpretFileAccess ns (WriteFile name ext) = proc content -> do
   realPath <- getStrOpt ("write-"<>name) ("File to write "<>name<>" to")
                                          (Just $ nsPrefix ns "" "/" "/" <> name<>"."<>ext) -< ()
-  liftKleisliIO id -< do
+  liftKleisli id -< do
     createDirectoryIfMissing True $ takeDirectory realPath
     LBS.writeFile realPath content
   strand #logger Log -< "Wrote file "<>realPath
@@ -370,10 +369,10 @@ interpretFileAccess ns (WriteFile name ext) = proc content -> do
 addingToCachingContext
   :: (CS.ContentHashable Identity b, Functor f, Arrow eff)
   => f b  -- ^ Action to get the value to add
-  -> (Using f ~> Collecting CachingContext ~> eff) a b
+  -> (f ~> Writer CachingContext ~> eff) a b
 addingToCachingContext getValue =
-  using getValue $ \finalValue ->
-    collecting [SomeHashable finalValue] $
+  fmapping getValue $ \finalValue ->
+    writing [SomeHashable finalValue] $
       returning finalValue
 
 -- | Given a Namespace to generate CLI flag names, turns a GetOpt into an actual
@@ -384,9 +383,9 @@ addingToCachingContext getValue =
 -- of CoreEff.
 interpretGetOpt :: (Arrow eff)
                 => GetOpt a b
-                -> (Given Namespace ~> Using Parser ~> Collecting CachingContext ~> eff) a b
+                -> (Reader Namespace ~> Parser ~> Writer CachingContext ~> eff) a b
 interpretGetOpt (GetOpt parser name docstring defVal) =
-  given $ \ns ->
+  reading $ \ns ->
     addingToCachingContext $
       option parser (   long (nsPrefix ns "" "-" "-" <> name)
                      <> help (nsPrefix ns "In " "." ": "<>docstring<>docSuffix)
@@ -396,7 +395,7 @@ interpretGetOpt (GetOpt parser name docstring defVal) =
       Just v -> (". Default: "<>show v, value v)
       Nothing -> ("", mempty)
 interpretGetOpt (Switch (defName,defDocstring,defVal) alts) =
-  given $ \ns ->
+  reading $ \ns ->
     addingToCachingContext $
       let defFlag =
             flag defVal defVal (   long (nsPrefix ns "" "-" "-" <> defName)
@@ -460,24 +459,24 @@ pipeline =
 -- This type is completely equivalent to:
 -- CoreEff a b = Namespace -> Parser (CachingContext, CS.ContentStore -> a -> IO b)
 type CoreEff =
-     Given Namespace -- Get the namespace we are in
-  ~> Using Parser    -- Get the CLI options, whose name is conditionned on the
-                     -- current namespace
-  ~> Collecting CachingContext -- Accumulate the context needed to know what to
-                               -- take into account to perform caching
-  ~> Given CS.ContentStore -- Get the content store, to cache computation at
-                           -- runtime
-  ~> Performing IO -- This is the runtime layer, the one the pipeline executes in
+     Reader Namespace -- Get the namespace we are in
+  ~> Parser -- Accumulate all the wanted options and get them from CLI.  The CLI
+            -- flags' names are conditionned on the current namespace
+  ~> Writer CachingContext -- Accumulate the context needed to know what to take
+                           -- into account to perform caching
+  ~> Reader CS.ContentStore -- Get the content store, to cache computation at
+                            -- runtime
+  ~> Kleisli IO -- This is the runtime layer, the one the pipeline executes in
 
 -- | When we want to perform a cached task, we need to access the current
 -- CachingContext before, so we need to do some newtype juggling
 instance Cacheable CoreEff where
   caching computation =
-    mapGiven $ \_ ->
-    mapUsing $
-    mapCollecting $ \cachingContext ->
-    mapGiven $ \store ->
-    mapPerforming $ \act i ->
+    mapReader $ \_ ->
+    mapCayleyEff $
+    mapWriter_ $ \cachingContext ->
+    mapReader $ \store ->
+    mapKleisli $ \act i ->
       CS.cacheKleisliIO (Just 1) computation Remote.NoCache store
                         (act . snd) (cachingContext, i)
 
@@ -485,8 +484,8 @@ main :: IO ()
 main = do
   let interpretFileAccess' toCore fileAccessEffect =
         -- We need to get the namespace to invoke 'interpretFileAccess'
-        given $ \ns ->
-            give ns $ toCore $ interpretFileAccess ns fileAccessEffect
+        reading $ \ns ->
+            runReader ns $ toCore $ interpretFileAccess ns fileAccessEffect
       parserLayer =
           pipeline & loosen
             -- Interpret mantle:
@@ -500,14 +499,14 @@ main = do
             & entwine_ #options interpretGetOpt
             & untwine
             -- Execute core:
-            & give [] -- Remove the namespace layer
-            & use     -- Get to the CLI parser
-  storeLayer <- snd . collect <$> -- Remove the CachingContext layer
+            & runReader [] -- Remove the namespace layer
+            & runCayley    -- Get to the CLI parser
+  storeLayer <- snd . runWriter <$> -- Remove the CachingContext layer
     -- parserLayer needs IO to be executed:
     execParser (info (helper <*> parserLayer) $
       header "A kernmantle pipeline solving chemical models")
   CS.withStore [absdir|/tmp/_store|] $ \store -> do
     -- Once we have the store, we can execute the rest of the layers:
-    storeLayer & give store    -- Remove the ContentStore layer
+    storeLayer & runReader store    -- Remove the ContentStore layer
                & perform ()    -- Finally, run the IO
   return ()
