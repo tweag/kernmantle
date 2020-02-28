@@ -225,7 +225,8 @@ class Namespaced eff where
 -- interpreted in some @Cayley (Reader Namespace)@ because they need a namespace
 -- to construct their effects
 instance Namespaced (Given Namespace eff) where
-  addToNamespace n (Cayley eff) = Cayley (\ns -> eff $ ns++[n])
+  addToNamespace n eff = given $ \ns ->
+                           give (ns++[n]) eff
 
 -- | Any rope whose core has namespacing has namespacing too
 instance (Namespaced core) => Namespaced (Rope r m core) where
@@ -333,12 +334,12 @@ nsPrefix ns beg sep end = beg <> intercalate sep ns <> end
 
 -- | Run a Console effect in any effect that can access a namespace and Kleisli m where m is a
 -- MonadIO
-interpretLogger :: (HasKleisliIO m eff)
+interpretLogger :: (Performs IO eff)
                 => Logger a b -> Given Namespace eff a b
 interpretLogger Log =
-  Cayley $ \ns ->  -- We need the namespace as for each line logged, we
+  given $ \ns ->  -- We need the namespace as for each line logged, we
                             -- want to print in which namespace it was logged
-    liftKleisliIO $ putStrLn . (nsPrefix ns "" "." ">> "<>)
+    performing $ putStrLn . (nsPrefix ns "" "." ">> "<>)
 
 -- | Weave a FileAccess into any rope with our CoreEff that can access options
 -- (to give the option to rebind the default file path), a logger (to log when a
@@ -363,6 +364,47 @@ interpretFileAccess ns (WriteFile name ext) = proc content -> do
     createDirectoryIfMissing True $ takeDirectory realPath
     LBS.writeFile realPath content
   strand #logger Log -< "Wrote file "<>realPath
+
+-- | Performs an action in a functor, adds this action result to
+-- the caching context, and returns the result in the underlying effect
+addingToCachingContext
+  :: (CS.ContentHashable Identity b, Functor f, Arrow eff)
+  => f b  -- ^ Action to get the value to add
+  -> (Using f ~> Collecting CachingContext ~> eff) a b
+addingToCachingContext getValue =
+  using getValue $ \finalValue ->
+    collecting [SomeHashable finalValue] $
+      returning finalValue
+
+-- | Given a Namespace to generate CLI flag names, turns a GetOpt into an actual
+-- optparse-applicative Parser, and adds the value of the option given by the
+-- user to the CachingContext
+--
+-- interpretGetOpt is the only weaver that needs access to basically every layer
+-- of CoreEff.
+interpretGetOpt :: (Arrow eff)
+                => GetOpt a b
+                -> (Given Namespace ~> Using Parser ~> Collecting CachingContext ~> eff) a b
+interpretGetOpt (GetOpt parser name docstring defVal) =
+  given $ \ns ->
+    addingToCachingContext $
+      option parser (   long (nsPrefix ns "" "-" "-" <> name)
+                     <> help (nsPrefix ns "In " "." ": "<>docstring<>docSuffix)
+                     <> metavar (show $ typeOf $ fromJust defVal) <> defValField )
+  where
+    (docSuffix, defValField) = case defVal of
+      Just v -> (". Default: "<>show v, value v)
+      Nothing -> ("", mempty)
+interpretGetOpt (Switch (defName,defDocstring,defVal) alts) =
+  given $ \ns ->
+    addingToCachingContext $
+      let defFlag =
+            flag defVal defVal (   long (nsPrefix ns "" "-" "-" <> defName)
+                                <> help (nsPrefix ns "In " "." ": "<> defDocstring) )
+          toFlag' (name, docstring, val) =
+            flag' val (   long (nsPrefix ns "" "-" "-" <> name)
+                       <> help (nsPrefix ns "In " "." ": "<>docstring) )
+      in foldr (<|>) defFlag (map toFlag' alts)
 
 --------------------------------------------------------------------------------
 -- Pipeline definition
@@ -425,65 +467,29 @@ type CoreEff =
                                -- take into account to perform caching
   ~> Given CS.ContentStore -- Get the content store, to cache computation at
                            -- runtime
-  ~> Perform IO -- This is the runtime layer, the one the pipeline executes in
-
--- | Creates a Writer that builds the action that returns the chosen option
--- value when the pipeline runs AND populates the 'CachingContext'
-reportCachingContext opt =
-  Cayley $ ([SomeHashable opt], arr $ const opt)
-
--- | Given a Namespace to generate CLI flag names, turns a GetOpt into an actual
--- optparse-applicative Parser, and adds the value of the option given by the
--- user to the CachingContext
---
--- interpretGetOpt is the only weaver that needs access to basically every layer
--- of CoreEff.
-interpretGetOpt :: GetOpt a b
-                -> CoreEff a b
-interpretGetOpt (GetOpt parser name docstring defVal) =
-  Cayley $ \ns ->  -- We need the namespace as we want to prefix option
-                            -- flags with it
-    Cayley $ reportCachingContext <$>
-      let (docSuffix, defValField) = case defVal of
-            Just v -> (". Default: "<>show v, value v)
-            Nothing -> ("", mempty)
-      in option parser (   long (nsPrefix ns "" "-" "-" <> name)
-                        <> help (nsPrefix ns "In " "." ": "<>docstring<>docSuffix)
-                        <> metavar (show $ typeOf $ fromJust defVal) <> defValField )
-interpretGetOpt (Switch (defName,defDocstring,defVal) alts) =
-  Cayley $ \ns ->
-    Cayley $ reportCachingContext <$>
-      let defFlag =
-            flag defVal defVal (   long (nsPrefix ns "" "-" "-" <> defName)
-                                <> help (nsPrefix ns "In " "." ": "<> defDocstring) )
-          toFlag' (name, docstring, val) =
-            flag' val (   long (nsPrefix ns "" "-" "-" <> name)
-                       <> help (nsPrefix ns "In " "." ": "<>docstring) )
-      in foldr (<|>) defFlag (map toFlag' alts)
+  ~> Performing IO -- This is the runtime layer, the one the pipeline executes in
 
 -- | When we want to perform a cached task, we need to access the current
 -- CachingContext before, so we need to do some newtype juggling
 instance Cacheable CoreEff where
-  caching c = fmapC (fmapC readCachingContextAndExec)
-    where
-      fmapC g (Cayley app) = Cayley $ fmap g app
-      readCachingContextAndExec (Cayley w) =
-        Cayley $ case w of
-          (cachingContext, Cayley r) ->
-            (cachingContext
-            ,Cayley $ \store -> Kleisli $ \i -> do
-              let Kleisli act = r store
-              CS.cacheKleisliIO (Just 1) c Remote.NoCache store
-                                (act . snd) (cachingContext,i))
+  caching computation =
+    mapGiven $ \_ ->
+    mapUsing $
+    mapCollecting $ \cachingContext ->
+    mapGiven $ \store ->
+    mapPerforming $ \act i ->
+      CS.cacheKleisliIO (Just 1) computation Remote.NoCache store
+                        (act . snd) (cachingContext, i)
 
 main :: IO ()
 main = do
   let interpretFileAccess' toCore fileAccessEffect =
         -- We need to get the namespace to invoke 'interpretFileAccess'
-        Cayley $ \ns ->
-          (runCayley $ toCore $ interpretFileAccess ns fileAccessEffect) ns
-      Cayley namespacedPipelineParser =
+        given $ \ns ->
+            give ns $ toCore $ interpretFileAccess ns fileAccessEffect
+      parserLayer =
           pipeline & loosen
+            -- Interpret mantle:
             & entwine  #ode     (.interpretODESolving)
                -- interpretODESolving needs #logger and #options, so it must be
                -- entwined before them
@@ -493,10 +499,15 @@ main = do
             & entwine_ #logger  interpretLogger
             & entwine_ #options interpretGetOpt
             & untwine
-      Cayley pipelineParser = namespacedPipelineParser []
-  Cayley (_, Cayley runPipelineR) <- execParser $ info (helper <*> pipelineParser) $
-         header "A kernmantle pipeline solving a biomodel"
+            -- Execute core:
+            & give [] -- Remove the namespace layer
+            & use     -- Get to the CLI parser
+  storeLayer <- snd . collect <$> -- Remove the CachingContext layer
+    -- parserLayer needs IO to be executed:
+    execParser (info (helper <*> parserLayer) $
+      header "A kernmantle pipeline solving chemical models")
   CS.withStore [absdir|/tmp/_store|] $ \store -> do
-    let Kleisli runPipeline = runPipelineR store
-    runPipeline ()
+    -- Once we have the store, we can execute the rest of the layers:
+    storeLayer & give store    -- Remove the ContentStore layer
+               & perform ()    -- Finally, run the IO
   return ()

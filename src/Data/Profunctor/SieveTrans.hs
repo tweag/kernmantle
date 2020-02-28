@@ -5,7 +5,8 @@
 {-# LANGUAGE ConstraintKinds        #-}
 {-# LANGUAGE FlexibleContexts       #-}
 {-# LANGUAGE TypeOperators          #-}
-{-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE PolyKinds              #-}
+{-# LANGUAGE RankNTypes             #-}
 
 module Data.Profunctor.SieveTrans where
 
@@ -19,7 +20,7 @@ import Data.Profunctor.Cayley
 -- | A general version of 'MonadIO' for profunctors and categories
 class SieveTrans sieve cat | cat -> sieve where
   liftSieve :: sieve a b -> cat a b
-  mapSieve :: (sieve a b -> sieve a b) -> cat a b -> cat a b
+  mapSieve :: (sieve a b -> sieve a' b') -> cat a b -> cat a' b'
 
 instance SieveTrans (Star f) (Star f) where
   liftSieve = id
@@ -51,7 +52,7 @@ liftKleisli = liftSieve . Kleisli
 {-# INLINE liftKleisli #-}
 
 mapKleisli :: (HasKleisli m eff)
-           => ((a -> m b) -> (a -> m b)) -> eff a b -> eff a b
+           => ((a -> m b) -> (a' -> m b')) -> eff a b -> eff a' b'
 mapKleisli f = mapSieve (Kleisli . f . runKleisli)
 {-# INLINE mapKleisli #-}
 
@@ -73,15 +74,72 @@ liftKleisliIO f = liftKleisli $ liftIO . f
 
 -- | An equivalent of ($) over type applications
 type (~>) (f::k->k') (eff::k) = f eff
-infixr 1 ~>
+infixr 1 ~>  -- To be of a lower precedence than (:->)
 
 type Using = Cayley
 type Given a = Using ((->) a)
 type Collecting a = Using ((,) a)
-type Perform = Kleisli
+type Performing = Kleisli
 
--- skip :: 
--- skip = Cayley . fmap
+skipping :: (Applicative f) => eff :-> Using f eff
+skipping = Cayley . pure
+{-# INLINE skipping #-}
 
--- given :: (t -> eff a b) -> (Given t ~> eff) a b
--- given f = Cayley $ ()
+using :: (Functor f) => f t -> (t -> eff a b) -> Using f eff a b
+using a f = Cayley $ fmap f a
+{-# INLINE using #-}
+
+use :: Cayley f eff a b -> f (eff a b)
+use (Cayley eff) = eff
+{-# INLINE use #-}
+
+mapUsing :: (Functor f) => (eff a b -> eff' a' b') -> Using f eff a b -> Using f eff' a' b'
+mapUsing f (Cayley eff) = Cayley $ fmap f eff
+{-# INLINE mapUsing #-}
+
+given :: (t -> eff a b) -> (Given t eff) a b
+given = Cayley
+{-# INLINE given #-}
+
+mapGiven :: (t -> eff a b -> eff' a' b')
+         -> Given t eff a b
+         -> Given t eff' a' b'
+mapGiven f (Cayley eff) = Cayley (\x -> f x $ eff x)
+{-# INLINE mapGiven #-}
+
+give :: t -> Given t eff a b -> eff a b
+give t (Cayley f) = f t
+{-# INLINE give #-}
+
+collecting :: w -> eff :-> Collecting w eff
+collecting w eff = Cayley (w, eff)
+{-# INLINE collecting #-}
+
+mapCollecting :: (w -> eff a b -> eff' a' b')
+              -> Collecting w eff a b
+              -> Collecting w eff' a' b'
+mapCollecting f (Cayley (w,eff)) = Cayley (w,f w eff)
+{-# INLINE mapCollecting #-}
+
+collect :: Collecting w eff a b -> (w, eff a b)
+collect (Cayley t) = t
+{-# INLINE collect #-}
+
+type Performs m = HasKleisli m
+
+performing :: (Performs m eff) => (a -> m b) -> eff a b
+performing = liftKleisli
+{-# INLINE performing #-}
+
+returning :: (Arrow eff) => b -> eff a b
+returning = arr . const
+{-# INLINE returning #-}
+
+mapPerforming :: (Performs m eff)
+              => ((a -> m b) -> (a' -> m b')) -> eff a b -> eff a' b'
+mapPerforming = mapKleisli
+{-# INLINE mapPerforming #-}
+
+perform :: a -> Performing m a b -> m b
+perform = flip runKleisli
+{-# INLINE perform #-}
