@@ -4,6 +4,8 @@
 {-# LANGUAGE UndecidableInstances   #-}
 {-# LANGUAGE ConstraintKinds        #-}
 {-# LANGUAGE FlexibleContexts       #-}
+{-# LANGUAGE TypeOperators          #-}
+{-# LANGUAGE PolyKinds #-}
 
 module Data.Profunctor.SieveTrans where
 
@@ -67,3 +69,19 @@ type HasKleisliIO m eff = (HasKleisli m eff, MonadIO m)
 liftKleisliIO :: (HasKleisliIO m eff) => (a -> IO b) -> eff a b
 liftKleisliIO f = liftKleisli $ liftIO . f
 {-# INLINE liftKleisliIO #-}
+
+
+-- | An equivalent of ($) over type applications
+type (~>) (f::k->k') (eff::k) = f eff
+infixr 1 ~>
+
+type Using = Cayley
+type Given a = Using ((->) a)
+type Collecting a = Using ((,) a)
+type Perform = Kleisli
+
+-- skip :: 
+-- skip = Cayley . fmap
+
+-- given :: (t -> eff a b) -> (Given t ~> eff) a b
+-- given f = Cayley $ ()

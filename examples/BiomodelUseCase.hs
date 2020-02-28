@@ -37,8 +37,6 @@ import Control.Arrow
 import Control.Category
 import Control.DeepSeq (deepseq)
 import Control.Monad.IO.Class
-import Control.Monad.Trans.Reader
-import Control.Monad.Trans.Writer.Strict
 import qualified Data.CAS.ContentHashable as CS
 import qualified Data.CAS.ContentStore as CS
 import qualified Data.CAS.RemoteCache as Remote
@@ -49,6 +47,7 @@ import Data.List (intercalate)
 import Data.Maybe (fromJust)
 import Data.Profunctor
 import Data.Profunctor.Cayley
+import Data.Profunctor.SieveTrans
 import Data.Store (Store)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as LT
@@ -225,8 +224,8 @@ class Namespaced eff where
 -- | How to add a namespace to tasks in a Rope. Several effects require to be
 -- interpreted in some @Cayley (Reader Namespace)@ because they need a namespace
 -- to construct their effects
-instance Namespaced (Cayley (Reader Namespace) eff) where
-  addToNamespace n (Cayley eff) = Cayley (local (++[n]) eff)
+instance Namespaced (Given Namespace eff) where
+  addToNamespace n (Cayley eff) = Cayley (\ns -> eff $ ns++[n])
 
 -- | Any rope whose core has namespacing has namespacing too
 instance (Namespaced core) => Namespaced (Rope r m core) where
@@ -335,9 +334,9 @@ nsPrefix ns beg sep end = beg <> intercalate sep ns <> end
 -- | Run a Console effect in any effect that can access a namespace and Kleisli m where m is a
 -- MonadIO
 interpretLogger :: (HasKleisliIO m eff)
-                => Logger a b -> Cayley (Reader Namespace) eff a b
+                => Logger a b -> Given Namespace eff a b
 interpretLogger Log =
-  Cayley $ reader $ \ns ->  -- We need the namespace as for each line logged, we
+  Cayley $ \ns ->  -- We need the namespace as for each line logged, we
                             -- want to print in which namespace it was logged
     liftKleisliIO $ putStrLn . (nsPrefix ns "" "." ">> "<>)
 
@@ -416,28 +415,22 @@ pipeline =
 
 -- | The core effect we need.
 --
--- It looks complicated but is actually completely equivalent to:
--- CoreEff a b = Namespace -> Parser (CachingContext, a -> CS.ContentStore -> IO b)
+-- This type is completely equivalent to:
+-- CoreEff a b = Namespace -> Parser (CachingContext, CS.ContentStore -> a -> IO b)
 type CoreEff =
-  -- These three first layers run when we load the pipeline, they will be
-  -- stripped before execution:
-  Cayley (Reader Namespace)  -- Get the namespace we are in
-    (Cayley Parser  -- Get the CLI options, whose name is conditionned on the
-                    -- current namespace
-      (Cayley (Writer CachingContext) -- Accumulate the context needed to know
-                                    -- what to take into account to perform
-                                    -- caching
-        -- The following layers are the ones that actually run when we
-        -- execute the pipeline:
-        (Kleisli  -- Kleisli is the frontier between load time and runtime
-          (ReaderT CS.ContentStore -- Get the content store, to cache
-                                   -- computation at runtime
-            IO))))
+     Given Namespace -- Get the namespace we are in
+  ~> Using Parser    -- Get the CLI options, whose name is conditionned on the
+                     -- current namespace
+  ~> Collecting CachingContext -- Accumulate the context needed to know what to
+                               -- take into account to perform caching
+  ~> Given CS.ContentStore -- Get the content store, to cache computation at
+                           -- runtime
+  ~> Perform IO -- This is the runtime layer, the one the pipeline executes in
 
 -- | Creates a Writer that builds the action that returns the chosen option
 -- value when the pipeline runs AND populates the 'CachingContext'
 reportCachingContext opt =
-  Cayley $ writer (arr $ const opt, [SomeHashable opt])
+  Cayley $ ([SomeHashable opt], arr $ const opt)
 
 -- | Given a Namespace to generate CLI flag names, turns a GetOpt into an actual
 -- optparse-applicative Parser, and adds the value of the option given by the
@@ -448,7 +441,7 @@ reportCachingContext opt =
 interpretGetOpt :: GetOpt a b
                 -> CoreEff a b
 interpretGetOpt (GetOpt parser name docstring defVal) =
-  Cayley $ reader $ \ns ->  -- We need the namespace as we want to prefix option
+  Cayley $ \ns ->  -- We need the namespace as we want to prefix option
                             -- flags with it
     Cayley $ reportCachingContext <$>
       let (docSuffix, defValField) = case defVal of
@@ -458,7 +451,7 @@ interpretGetOpt (GetOpt parser name docstring defVal) =
                         <> help (nsPrefix ns "In " "." ": "<>docstring<>docSuffix)
                         <> metavar (show $ typeOf $ fromJust defVal) <> defValField )
 interpretGetOpt (Switch (defName,defDocstring,defVal) alts) =
-  Cayley $ reader $ \ns ->
+  Cayley $ \ns ->
     Cayley $ reportCachingContext <$>
       let defFlag =
             flag defVal defVal (   long (nsPrefix ns "" "-" "-" <> defName)
@@ -475,20 +468,20 @@ instance Cacheable CoreEff where
     where
       fmapC g (Cayley app) = Cayley $ fmap g app
       readCachingContextAndExec (Cayley w) =
-        Cayley $ writer $ case runWriter w of
-          (Kleisli act, cachingContext) ->
-            (Kleisli $ \i -> do
-              store <- ask
+        Cayley $ case w of
+          (cachingContext, Cayley r) ->
+            (cachingContext
+            ,Cayley $ \store -> Kleisli $ \i -> do
+              let Kleisli act = r store
               CS.cacheKleisliIO (Just 1) c Remote.NoCache store
-                                (act . snd) (cachingContext,i)
-            ,cachingContext)
+                                (act . snd) (cachingContext,i))
 
 main :: IO ()
 main = do
   let interpretFileAccess' toCore fileAccessEffect =
         -- We need to get the namespace to invoke 'interpretFileAccess'
-        Cayley $ reader $ \ns ->
-          runReader (runCayley $ toCore $ interpretFileAccess ns fileAccessEffect) ns
+        Cayley $ \ns ->
+          (runCayley $ toCore $ interpretFileAccess ns fileAccessEffect) ns
       Cayley namespacedPipelineParser =
           pipeline & loosen
             & entwine  #ode     (.interpretODESolving)
@@ -500,9 +493,10 @@ main = do
             & entwine_ #logger  interpretLogger
             & entwine_ #options interpretGetOpt
             & untwine
-      Cayley pipelineParser = runReader namespacedPipelineParser []
-  Cayley runPipelineW <- execParser $ info (helper <*> pipelineParser) $
+      Cayley pipelineParser = namespacedPipelineParser []
+  Cayley (_, Cayley runPipelineR) <- execParser $ info (helper <*> pipelineParser) $
          header "A kernmantle pipeline solving a biomodel"
-  let Kleisli runPipeline = fst $ runWriter runPipelineW
-  CS.withStore [absdir|/tmp/_store|] $ runReaderT $ runPipeline ()
+  CS.withStore [absdir|/tmp/_store|] $ \store -> do
+    let Kleisli runPipeline = runPipelineR store
+    runPipeline ()
   return ()
