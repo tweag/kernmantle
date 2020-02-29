@@ -6,6 +6,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 -- | Helper functions for Arrow effects
 
@@ -18,6 +19,7 @@ import Data.Profunctor
 import Data.Profunctor.Cayley
 import Data.Profunctor.SieveTrans
 import Data.Profunctor.Traversing
+import Data.Ratio
 import GHC.Generics
 
 import Control.Kernmantle.Error
@@ -70,15 +72,37 @@ catchE a onExc = proc e -> do
     Right r ->
       returnA -< r
 
+-- | A SplitId is a ratio of two positive numbers
+newtype SplitId = SplitId (Ratio Word)
+  deriving (Generic, Eq, Ord, Num)
+
+instance Show SplitId where
+  show (SplitId r) | r == 1 = "1"
+                   | otherwise = show (numerator r)<>"/"<>show (denominator r)
+
+-- | 'split' defines the Calkin-Wilf tree. Its guaranteed never to produce twice
+-- the same result if we split repeatedly starting from 1.
+split :: (s -> SplitId) -> (s -> SplitId -> s) -- Morally a lens, but we don't
+                                               -- depend on lens
+      -> (s -> a) -> (a -> b -> c) -> (s -> b) -> s -> c
+split get set f c g s = case get s of
+  SplitId r -> let a = numerator r; b = denominator r
+               in f (set s $ SplitId $ a % (a+b)) `c` g (set s $ SplitId $ (a+b) % b)
+{-# INLINE split #-}
+
 -- | The identifiers reflect the structure of the pipeline that led to some
--- task. They are increased at every use of (.), (***), (|||) or (<+>). This
--- makes it so every task in the pipeline has a different identifier.
+-- task. They are 'split' at every use of (.), (***), (|||) or (<+>). This makes
+-- it so every task in the pipeline has a different identifier.
 data ArrowIdent = ArrowIdent
-  { aidComp   :: {-# UNPACK #-} !Int
-  , aidPar    :: {-# UNPACK #-} !Int
-  , aidPlus   :: {-# UNPACK #-} !Int
-  , aidChoice :: {-# UNPACK #-} !Int }
-  deriving (Generic, Show)
+  { aidChoice :: {-# UNPACK #-} !SplitId
+  , aidPlus   :: {-# UNPACK #-} !SplitId
+  , aidPar    :: {-# UNPACK #-} !SplitId
+  , aidComp   :: {-# UNPACK #-} !SplitId }
+  deriving (Generic, Eq, Ord)
+
+instance Show ArrowIdent where
+  show (ArrowIdent a b c d) =
+    show a <>":"<>show b<>":"<>show c<>":"<>show d
 
 -- | An arrow transformer that can automatically determine an identifier from
 -- its position in a pipeline. It is isomorphic to a @Reader ArrowIdent ~> arr@, but
@@ -87,34 +111,36 @@ newtype AutoIdent arr a b = AutoIdent (ArrowIdent -> arr a b)
   deriving (Profunctor, Strong, Choice)
     via WrappedArrow (AutoIdent arr)
 
--- | Given an initial ArrowIdent, gets the wrapped effect
-runAutoIdent :: ArrowIdent -> AutoIdent arr a b -> arr a b
-runAutoIdent i (AutoIdent f) = f i
+runAutoIdent' :: SplitId -> AutoIdent arr a b -> arr a b
+runAutoIdent' i (AutoIdent f) = f $ ArrowIdent i i i i
+
+runAutoIdent :: AutoIdent arr a b -> arr a b
+runAutoIdent = runAutoIdent' 1
 
 instance (Category eff) => Category (AutoIdent eff) where
   id = AutoIdent $ const id
-  AutoIdent b . AutoIdent a = AutoIdent $ \aid ->
-    b aid{aidComp=aidComp aid + 1} . a aid
+  AutoIdent b . AutoIdent a = AutoIdent $ split aidComp (\ai i -> ai{aidComp=i})
+    b (.) a
 instance (Arrow eff) => Arrow (AutoIdent eff) where
   arr = AutoIdent . const . arr
   first (AutoIdent f) = AutoIdent $ first . f
   second (AutoIdent f) = AutoIdent $ second . f
-  AutoIdent a *** AutoIdent b = AutoIdent $ \aid ->
-    a aid *** b aid{aidPar=aidPar aid + 1}
-  AutoIdent a &&& AutoIdent b = AutoIdent $ \aid ->
-    a aid &&& b aid{aidPar=aidPar aid + 1}
+  AutoIdent a *** AutoIdent b = AutoIdent $ split aidPar (\ai i -> ai{aidPar=i})
+    a (***) b
+  AutoIdent a &&& AutoIdent b = AutoIdent $ split aidPar (\ai i -> ai{aidPar=i})
+    a (&&&) b
 instance (ArrowZero eff) => ArrowZero (AutoIdent eff) where
   zeroArrow = AutoIdent $ const zeroArrow
 instance (ArrowPlus eff) => ArrowPlus (AutoIdent eff) where
-  AutoIdent a <+> AutoIdent b = AutoIdent $ \aid ->
-    a aid <+> b aid{aidPlus=aidPlus aid + 1}
+  AutoIdent a <+> AutoIdent b = AutoIdent $ split aidPlus (\ai i -> ai{aidPlus=i})
+    a (<+>) b
 instance (ArrowChoice eff) => ArrowChoice (AutoIdent eff) where
   left (AutoIdent f) = AutoIdent $ left . f
   right (AutoIdent f) = AutoIdent $ right . f
-  AutoIdent a ||| AutoIdent b = AutoIdent $ \aid ->
-    a aid ||| b aid{aidChoice=aidChoice aid + 1}
-  AutoIdent a +++ AutoIdent b = AutoIdent $ \aid ->
-    a aid +++ b aid{aidChoice=aidChoice aid + 1}
+  AutoIdent a ||| AutoIdent b = AutoIdent $ split aidChoice (\ai i -> ai{aidChoice=i})
+    a (|||) b
+  AutoIdent a +++ AutoIdent b = AutoIdent $ split aidChoice (\ai i -> ai{aidChoice=i})
+    a (+++) b
 
 instance (Traversing eff, ArrowChoice eff) => Traversing (AutoIdent eff) where
   traverse' (AutoIdent a) = AutoIdent $ traverse' . a
@@ -131,6 +157,6 @@ class HasAutoIdent wrappedEff eff | eff -> wrappedEff where
 instance HasAutoIdent eff (AutoIdent eff) where
   liftAutoIdent f = AutoIdent f
 
-instance (HasAutoIdent i eff, Applicative f)
-  => HasAutoIdent i (Cayley f eff) where
+instance (HasAutoIdent ai eff, Applicative f)
+  => HasAutoIdent ai (Cayley f eff) where
   liftAutoIdent f = Cayley $ pure (liftAutoIdent f)

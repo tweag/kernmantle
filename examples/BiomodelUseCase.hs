@@ -179,7 +179,7 @@ data GetOpt a b where
          -> Maybe b  -- ^ Default value
          -> GetOpt a b  -- ^ Returns final value
   -- | Ask to select between alternatives
-  Switch :: (CS.ContentHashable Identity b)
+  Switch :: (Show b, CS.ContentHashable Identity b)
          => (String, String, b) -- ^ Name and docstring of default
          -> [(String, String, b)]
             -- ^ Names and docstrings of alternatives
@@ -198,18 +198,26 @@ data FileAccess a b where
 data Logger a b where
   Log :: Logger String ()
 
+instance CS.ContentHashable Identity SplitId
 instance CS.ContentHashable Identity ArrowIdent
 
 data SomeHashable where
   SomeHashable ::
-    (CS.ContentHashable Identity a) => a -> SomeHashable
+    (CS.ContentHashable Identity a, Show a) => a -> SomeHashable
 instance CS.ContentHashable Identity SomeHashable where
   contentHashUpdate ctx (SomeHashable a) = CS.contentHashUpdate ctx a
 type CachingContext = [SomeHashable]
-  
+instance Show SomeHashable where
+  show (SomeHashable a) = show a
+
+
 -- | An class to cache part of the pipeline
 class Cacheable eff where
-  caching :: CS.Cacher (CachingContext,a) b -> eff a b -> eff a b
+  caching :: (CS.ContentHashable Identity a, Show a, Store b)
+          => Maybe T.Text -- ^ Give a name to the task. If Nothing, use
+                          -- AutoIdent
+          -> eff a b
+          -> eff a b
 
 -- | Any core that has caching provides it to the rope:
 instance (Cacheable core) => Cacheable (Rope r m core) where
@@ -334,14 +342,16 @@ nsPrefix :: Namespace -> String -> String -> String -> String
 nsPrefix [] _ _ _ = ""
 nsPrefix ns beg sep end = beg <> intercalate sep ns <> end
 
--- | Run a Console effect in any effect that can access a namespace and Kleisli m where m is a
--- MonadIO
-interpretLogger :: (HasKleisli IO eff)
+-- | Run a Console effect in any effect that can access a namespace and an
+-- AutoIdent
+interpretLogger :: (HasAutoIdent (Kleisli IO) eff)
                 => Logger a b -> (Reader Namespace ~> eff) a b
 interpretLogger Log =
   reading $ \ns ->  -- We need the namespace as for each line logged, we
                             -- want to print in which namespace it was logged
-    liftKleisli $ putStrLn . (nsPrefix ns "" "." ">> "<>)
+    liftAutoIdent $ \ai ->
+      let pref = nsPrefix ns "" "." ""<>"["<>show ai<>"]>> "
+      in Kleisli $ putStrLn . (pref <>)
 
 -- | Weave a FileAccess into any rope with our CoreEff that can access options
 -- (to give the option to rebind the default file path), a logger (to log when a
@@ -369,7 +379,7 @@ interpretFileAccess ns (WriteFile name ext) = proc content -> do
 -- | Performs an action in a functor, adds this action result to
 -- the caching context, and returns the result in the underlying effect
 addingToCachingContext
-  :: (CS.ContentHashable Identity b, Functor f, Arrow eff)
+  :: (CS.ContentHashable Identity b, Show b, Functor f, Arrow eff)
   => f b  -- ^ Action to get the value to add
   -> (f ~> Writer CachingContext ~> eff) a b
 addingToCachingContext getValue =
@@ -433,23 +443,33 @@ chemical =  -- Input param is the reaction rate and we don't want post-processin
 pipeline =
   log "Beginning pipeline"
   >>>
-  addToNamespace "vanderpol"
-    (getOpt "mu" "µ parameter" (Just 2)
-     >>>
-     caching (CS.defaultCacherWithIdent 1000)
-       -- Any option, any change as to where to write simulation results will
-       -- invalidate the cache, and make the content of the 'caching' block to
-       -- be re-executed
-       (strand #ode vanderpol))
+  addToNamespace "vdp1" vdp
+  >>>
+  addToNamespace "vdp2" vdp
+    -- We use twice the vdp task, so we must put them in different namespaces,
+    -- else their option flags and output files will conflict
   >>> 
-  addToNamespace "chemical"
+  addToNamespace "chem"
     (getOpt "k" "Left-to-right reaction rate" (Just 2)
      >>>
-     caching (CS.defaultCacherWithIdent 1001)
-       (strand #ode chemical))
+     caching Nothing (strand #ode chemical))
+     -- Any option, any change as to where to write simulation results will
+     -- invalidate the cache, and make the content of the 'caching' block to be
+     -- re-executed. 'Nothing' here means this task is not named, so caching
+     -- will identify it with an AutoIdent (determined from its position in the
+     -- pipeline)
   >>>
   log "Pipeline finished"
-  where log s = arr (const s) >>> strand #logger Log
+  where
+    log s = arr (const s) >>> strand #logger Log
+    vdp = getOpt "mu" "µ parameter" (Just 2)
+          >>>
+          caching (Just "vanderpol") (strand #ode vanderpol)
+          -- This task has an identifier for caching purposes, therefore it will
+          -- not use auto-ident. This means that if its 2 uses in the pipeline
+          -- are parameterized exactly the same, only the first one will be
+          -- executed (beware that by default their output files are different,
+          -- as they aren't in the same namespace!)
 
 --- * END OF PIPELINE
 
@@ -459,11 +479,12 @@ pipeline =
 -- | The core effect we need.
 --
 -- This type is completely equivalent to:
--- CoreEff a b = Namespace -> Parser (CachingContext, CS.ContentStore -> a -> IO b)
+-- CoreEff a b =
+--   Namespace -> Parser (CachingContext, CS.ContentStore -> ArrowIdent -> a -> IO b)
 type CoreEff =
      Reader Namespace -- Get the namespace we are in
-  ~> Parser -- Accumulate all the wanted options and get them from CLI.  The CLI
-            -- flags' names are conditionned on the current namespace
+  ~> Parser -- Accumulate all the wanted options and get them from CLI. The CLI
+            -- flags' names are conditioned on the current namespace
   ~> Writer CachingContext -- Accumulate the context needed to know what to take
                            -- into account to perform caching
   ~> Reader CS.ContentStore -- Get the content store, to cache computation at
@@ -474,14 +495,21 @@ type CoreEff =
 -- | When we want to perform a cached task, we need to access the current
 -- CachingContext before, so we need to do some newtype juggling
 instance Cacheable CoreEff where
-  caching cacher =
+  caching mbName =
     mapReader $ \_ ->
     mapCayleyEff $
     mapWriter_ $ \cachingContext ->
-    mapReader $ \store ->
-    mapKleisli $ \act i ->
-      CS.cacheKleisliIO (Just 1) cacher Remote.NoCache store
-                        (act . snd) (cachingContext, i)
+    mapReader $ \store (AutoIdent f) ->
+      AutoIdent $ \ai ->
+        case f ai of
+          Kleisli act -> Kleisli $ \input ->
+            let ident = case mbName of Nothing -> Left ai
+                                       Just n -> Right n
+                -- Using ident as phantom input for now as actual cas-store
+                -- cacher ident must be Integer
+            in CS.cacheKleisliIO
+                 (Just 1) (CS.defaultCacherWithIdent 1) Remote.NoCache store
+                 (\(i,_,_) -> act i) (input,ident,cachingContext)
 
 main :: IO ()
 main = do
@@ -511,6 +539,6 @@ main = do
   CS.withStore [absdir|/tmp/_store|] $ \store -> do
     -- Once we have the store, we can execute the rest of the layers:
     storeLayer & runReader store    -- Remove the ContentStore layer
-               & runAutoIdent (ArrowIdent 0 0 0 0) -- Remove the AutoIdent layer
+               & runAutoIdent -- Remove the AutoIdent layer
                & perform ()    -- Finally, run the IO
   return ()
