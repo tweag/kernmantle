@@ -29,6 +29,7 @@ import GHC.TypeLits
 
 import Prelude hiding (id, (.))
 
+import Control.Kernmantle.Arrow
 import Control.Kernmantle.Error
 import Control.Kernmantle.Builder
 
@@ -79,7 +80,7 @@ newtype RopeRunner (record::RopeRec) (mantle::[Strand]) (interp::BinEff) (core::
            , Profunctor, Strong, Choice, Closed, Costrong, Cochoice
            , Mapping, Traversing
            , ThrowEffect ex, TryEffect ex
-           , SieveTrans sieve )
+           , SieveTrans sieve, HasAutoIdent eff )
     via Cayley ((->) (record (Weaver interp) mantle)) core
   deriving (ProfunctorFunctor, ProfunctorMonad)
     via Cayley ((->) (record (Weaver interp) mantle))

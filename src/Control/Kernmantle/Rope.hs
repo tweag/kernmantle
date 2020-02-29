@@ -92,6 +92,7 @@ import GHC.OverloadedLabels
 
 import Prelude hiding (id, (.))
 
+import Control.Kernmantle.Arrow
 import Control.Kernmantle.Error
 import Control.Kernmantle.Builder
 import Control.Kernmantle.Rope.Internal
@@ -109,7 +110,7 @@ newtype Rope (record::RopeRec) (mantle::[Strand]) (core::BinEff) a b =
            , Profunctor, Strong, Choice, Closed, Costrong, Cochoice
            , Mapping, Traversing
            , ThrowEffect ex, TryEffect ex
-           , SieveTrans sieve
+           , SieveTrans sieve, HasAutoIdent eff
            , Bifunctor, Biapplicative
            )
 

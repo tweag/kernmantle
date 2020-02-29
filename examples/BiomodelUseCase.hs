@@ -32,6 +32,7 @@
 
 import Prelude hiding (id, (.))
 
+import Control.Kernmantle.Arrow
 import Control.Kernmantle.Rope
 import Control.Arrow
 import Control.Category
@@ -89,8 +90,8 @@ type InitConds = [Double]
 data ODESolving params result = ODESolving
   { odeSystem :: params -> ODESystem  -- ^ Given the model params, build an ODESystem
   , odePostProcess :: L.Vector Double -> L.Matrix Double -> result
-      -- ^ Given the time steps used and the solving results (with first column
-      -- being time), compute the final result
+      -- ^ Given the time steps used and the solving results, compute the final
+      -- result
   , odeVarNames :: [T.Text]  -- ^ Names of the variables (and of the columns of the matrix)
   , odeInitConds :: InitConds -- ^ Initial values of the variables
   }
@@ -197,13 +198,15 @@ data FileAccess a b where
 data Logger a b where
   Log :: Logger String ()
 
+instance CS.ContentHashable Identity ArrowIdent
+
 data SomeHashable where
   SomeHashable ::
     (CS.ContentHashable Identity a) => a -> SomeHashable
 instance CS.ContentHashable Identity SomeHashable where
   contentHashUpdate ctx (SomeHashable a) = CS.contentHashUpdate ctx a
 type CachingContext = [SomeHashable]
-
+  
 -- | An class to cache part of the pipeline
 class Cacheable eff where
   caching :: CS.Cacher (CachingContext,a) b -> eff a b -> eff a b
@@ -297,7 +300,6 @@ interpretODESolving
   :: ODESolving a b
   -> AnyRopeWith '[ '("options", GetOpt), '("logger",Logger), '("files",FileAccess) ]
                  '[Arrow] a b
--- | Solve an ODE model in any Rope that has a GetOpt effect
 interpretODESolving mdl = proc params -> do
   -- We ask for an override of the initial conditions:
   ics <- getOpt "ics" ("Initial conditions for variables "++show (odeVarNames mdl)) (Just $ odeInitConds mdl) -< ()
@@ -380,7 +382,7 @@ addingToCachingContext getValue =
 -- user to the CachingContext
 --
 -- interpretGetOpt is the only weaver that needs access to basically every layer
--- of CoreEff.
+-- of CoreEf.f
 interpretGetOpt :: (Arrow eff)
                 => GetOpt a b
                 -> (Reader Namespace ~> Parser ~> Writer CachingContext ~> eff) a b
@@ -466,18 +468,19 @@ type CoreEff =
                            -- into account to perform caching
   ~> Reader CS.ContentStore -- Get the content store, to cache computation at
                             -- runtime
-  ~> Kleisli IO -- This is the runtime layer, the one the pipeline executes in
+  ~> AutoIdent  -- Get an identifier for the task
+      (Kleisli IO) -- This is the runtime layer, the one the pipeline executes in
 
 -- | When we want to perform a cached task, we need to access the current
 -- CachingContext before, so we need to do some newtype juggling
 instance Cacheable CoreEff where
-  caching computation =
+  caching cacher =
     mapReader $ \_ ->
     mapCayleyEff $
     mapWriter_ $ \cachingContext ->
     mapReader $ \store ->
     mapKleisli $ \act i ->
-      CS.cacheKleisliIO (Just 1) computation Remote.NoCache store
+      CS.cacheKleisliIO (Just 1) cacher Remote.NoCache store
                         (act . snd) (cachingContext, i)
 
 main :: IO ()
@@ -508,5 +511,6 @@ main = do
   CS.withStore [absdir|/tmp/_store|] $ \store -> do
     -- Once we have the store, we can execute the rest of the layers:
     storeLayer & runReader store    -- Remove the ContentStore layer
+               & runAutoIdent (ArrowIdent 0 0 0 0) -- Remove the AutoIdent layer
                & perform ()    -- Finally, run the IO
   return ()
