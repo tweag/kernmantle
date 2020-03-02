@@ -113,6 +113,6 @@ prog = proc name -> do
 -- strand an directly interpret every strand in the core effect
 main :: IO ()
 main = prog & loosen
-            & entwine_ #console (Kleisli . runConsole)
-            & entwine_ #file    (Kleisli . runFile)
+            & weave' #console (Kleisli . runConsole)
+            & weave' #file    (Kleisli . runFile)
             & runSieveCore "You"

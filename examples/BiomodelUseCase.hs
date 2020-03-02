@@ -520,14 +520,14 @@ main = do
       parserLayer =
           pipeline & loosen
             -- Interpret mantle:
-            & entwine  #ode     (.interpretODESolving)
+            & weave  #ode     (.interpretODESolving)
                -- interpretODESolving needs #logger and #options, so it must be
-               -- entwined before them
-            & entwine  #files   interpretFileAccess'
+               -- weaved before them
+            & weave  #files   interpretFileAccess'
                -- interpretFileAccess needs #logger and #options, so it must be
-               -- entwined before them
-            & entwine_ #logger  interpretLogger
-            & entwine_ #options interpretGetOpt
+               -- weaved before them
+            & weave' #logger  interpretLogger
+            & weave' #options interpretGetOpt
             & untwine
             -- Execute core:
             & runReader [] -- Remove the namespace layer

@@ -18,8 +18,8 @@ import Control.Kernmantle.Rope
   ( AnyRopeWith
   , HasKleisli (..)
   , HasKleisliIO (..)
-  , entwine
-  , entwine_
+  , weave
+  , weave'
   , untwine
   , loosen
   , strand
@@ -183,10 +183,10 @@ main =
           pipeline & loosen
               -- Order matters here: since interpretCached needs to run the full
               -- rope (as each 'Cached' computation must be able to access all
-              -- the other effects), its entwine call must be the first:
-            & entwine  #cached  (interpretCached store)
-            & entwine_ #options interpretGetOpt
-            & entwine_ #files   interpretFileAccess
+              -- the other effects), its weave call must be the first:
+            & weave  #cached  (interpretCached store)
+            & weave' #options interpretGetOpt
+            & weave' #files   interpretFileAccess
             & untwine
     Kleisli runPipeline <- execParser $ info (helper <*> pipelineParser) $
          header "A kernmantle pipeline with caching"

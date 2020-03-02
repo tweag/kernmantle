@@ -50,12 +50,12 @@ module Control.Kernmantle.Rope
   , mapKleisli
   , runSieveCore
     -- * Rope Interpretation
-  , entwine
-  , entwine_
+  , weave
+  , weave'
   , retwine
   , untwine
   , onEachEffFunctor
-  , entwineEffFunctors
+  , weaveEffFunctors
     -- * Predicates
   , AnyRopeWith
   , TightRopeWith
@@ -127,12 +127,12 @@ mapRopeCore :: (core a b -> core a' b') -> Rope r m core a b -> Rope r m core a'
 mapRopeCore f rope = mkRope $ f . runRope rope
 {-# INLINE mapRopeCore #-}
 
--- | A 'Rope' that is "tight", meaning you cannot 'entwine' new 'Strand's to
+-- | A 'Rope' that is "tight", meaning you cannot 'weave' new 'Strand's to
 -- it. The 'strand' function is @O(1)@ on 'TightRope's whatever the number of
 -- 'Strand's.
 type TightRope = Rope ARec
 
--- | A 'Rope' that is "loose", meaning you can 'entwine' new 'Strand's to
+-- | A 'Rope' that is "loose", meaning you can 'weave' new 'Strand's to
 -- it. The 'strand' function is @O(n)@ on 'LooseRope's, @n@ being the number of
 -- 'Strand's.
 type LooseRope = Rope Rec
@@ -197,7 +197,7 @@ tighten r = mkRope $ runRope r . fromARec
 {-# INLINE tighten #-}
 
 -- | Turn a 'TightRope' into a 'LooseRope'. This is very often the first step
--- in a chain of 'entwine's.
+-- in a chain of 'weave's.
 loosen :: (NatToInt (RLength m))
        => TightRope m core :-> LooseRope m core
 loosen r = mkRope $ runRope r . toARec
@@ -227,10 +227,10 @@ loosen r = mkRope $ runRope r . toARec
 --   strandInterpreter ::
 --     LooseRope ('("effect",Eff) ': mantle) CoreEff :->
 --     LooseRope mantle CoreEff
---   strandInterpreter = entwine #effect interpret
+--   strandInterpreter = weave #effect interpret
 -- @
 --
-entwine
+weave
   :: forall name binEff mantle core.
      Label name
   -- ^ The name of the strand to be woven.
@@ -241,13 +241,13 @@ entwine
   -- ^ An interpretation function for a 'Rope' with containing the given effect
   -- strand, transformed into the same Rope but with that effect woven in the
   -- core.
-entwine _ interpFn rope = mkRope $ \r ->
+weave _ interpFn rope = mkRope $ \r ->
   let runThatRope :: LooseRope ('(name,binEff) ': mantle) core :-> core
       runThatRope rope' =
         runRope rope' (Weaver (interpFn runThatRope) :& r)
   in runThatRope rope
 
--- | A version of 'entwine' where the strand can be directly interpreted in the
+-- | A version of 'weave' where the strand can be directly interpreted in the
 -- core with no need to trigger other effects. For example, given an effect
 -- @Eff@, whose label is "effect" being interpreted in a core effect @CoreEff@,
 -- one first defines an interpretation function:
@@ -263,10 +263,10 @@ entwine _ interpFn rope = mkRope $ \r ->
 --   strandInterpreter ::
 --     LooseRope ('("effect",Eff) ': mantle) CoreEff :->
 --     LooseRope mantle CoreEff
---   strandInterpreter = entwine_ #effect interpret
+--   strandInterpreter = weave' #effect interpret
 -- @
 --
-entwine_
+weave'
   :: forall name binEff mantle core.
      Label name
   -- ^ The name of the strand to be woven.
@@ -276,8 +276,8 @@ entwine_
   -- ^ An interpretation function for a 'Rope' with containing the given effect
   -- strand, transformed into the same Rope but with that effect woven in the
   -- core.
-entwine_ lbl interpFn = entwine lbl (const interpFn)
-{-# INLINE entwine_ #-}
+weave' lbl interpFn = weave lbl (const interpFn)
+{-# INLINE weave' #-}
 
 -- | Reorders the strands to match some external context. @strands'@ can contain
 -- more elements than @strands@. Note it works on both 'TightRope's and
@@ -312,14 +312,14 @@ runSieveCore :: (Sieve biEff uEff)
 runSieveCore a r = sieve (untwine r) a
 {-# INLINE runSieveCore #-}
 
-entwineEffFunctors
+weaveEffFunctors
   :: (EffFunctor f, RMap (MapStrandEffs f mantle1))
   => (f core' :-> core)
   -> (LooseRope mantle2 core :-> core')
   -> LooseRope (MapStrandEffs f mantle1 ++ mantle2) core
  :-> LooseRope mantle1 core'
-entwineEffFunctors f g (Rope rnr) = Rope $ unwrapSomeStrands f (g . Rope) rnr
-{-# INLINE entwineEffFunctors #-}
+weaveEffFunctors f g (Rope rnr) = Rope $ unwrapSomeStrands f (g . Rope) rnr
+{-# INLINE weaveEffFunctors #-}
 
 -- | Separates a 'LooseRope' in two parts: one wrapped in EffFunctors
 -- (@mantle1@) and one which is not (@mantle2) and runs them. This is a
@@ -342,7 +342,7 @@ onEachEffFunctor
   -> LooseRope (MapStrandEffs f mantle1 ++ mantle2) core
  :-> LooseRope rest core
 onEachEffFunctor runWrapper runMantle1 runMantle2 =
-  runMantle1 . entwineEffFunctors runWrapper (untwine . runMantle2)
+  runMantle1 . weaveEffFunctors runWrapper (untwine . runMantle2)
 {-# INLINE onEachEffFunctor #-}
 
 -- groupBuilderStrands

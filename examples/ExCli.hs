@@ -98,6 +98,6 @@ main = do
   where
     Cayley interpretedPipeline =
       pipeline & loosen
-               & entwine_ #options interpretGetOpt
-               & entwine_ #files   interpretFileAccess
+               & weave' #options interpretGetOpt
+               & weave' #files   interpretFileAccess
                & untwine
