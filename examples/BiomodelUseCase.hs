@@ -11,6 +11,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE TupleSections #-}
 
 -- | This example:
 --
@@ -211,17 +212,60 @@ instance Show SomeHashable where
   show (SomeHashable a) = show a
 
 
--- | An class to cache part of the pipeline
-class Cacheable eff where
-  caching :: (CS.ContentHashable Identity a, Show a, Store b)
-          => Maybe T.Text -- ^ Give a name to the task. If Nothing, use
-                          -- AutoIdent
-          -> eff a b
-          -> eff a b
+-- | A class to cache part of the pipeline
+class ProvidesCaching eff where
+  withStore :: (CS.ContentHashable Identity a, Show a, Store b)
+            => eff a b
+            -> eff a b
+-- | A class to cache part of the pipeline where the hash can depend on the
+-- position of the task in the pipeline
+class (ProvidesCaching eff) => ProvidesPosCaching eff where
+  withStore' :: (CS.ContentHashable Identity a, Show a, Store b)
+             => eff a b
+             -> eff a b
 
--- | Any core that has caching provides it to the rope:
-instance (Cacheable core) => Cacheable (Rope r m core) where
-  caching = mapRopeCore . caching
+instance {-# OVERLAPPABLE #-} (Functor f, ProvidesCaching eff)
+  => ProvidesCaching (f ~> eff) where
+  withStore (Cayley f) = Cayley $ fmap withStore f
+instance {-# OVERLAPPABLE #-} (Functor f, ProvidesPosCaching eff)
+  => ProvidesPosCaching (f ~> eff) where
+  withStore' (Cayley f) = Cayley $ fmap withStore' f
+
+instance ProvidesCaching (Reader CS.ContentStore ~> Kleisli IO) where
+  withStore =
+    mapReader $ \store ->
+    mapKleisli $ \act input ->
+      CS.cacheKleisliIO
+       (Just 1) (CS.defaultCacherWithIdent 1) Remote.NoCache store
+       act input
+
+instance (Arrow eff, ProvidesCaching eff) => ProvidesCaching (Writer CachingContext ~> eff) where
+  withStore =
+    mapWriter_ $ \newContext eff ->
+      arr (,newContext) >>> withStore (eff . arr fst)
+      -- New context is just added as phantom input to the underlying effect
+instance (Arrow eff, ProvidesPosCaching eff) => ProvidesPosCaching (Writer CachingContext ~> eff) where
+  withStore' =
+    mapWriter_ $ \newContext eff ->
+      arr (,newContext) >>> withStore' (eff . arr fst)
+
+instance (Arrow eff, ProvidesCaching eff) => ProvidesCaching (AutoIdent eff) where
+  withStore (AutoIdent f) = AutoIdent $ withStore . f
+instance (Arrow eff, ProvidesCaching eff) => ProvidesPosCaching (AutoIdent eff) where
+  withStore' (AutoIdent f) = AutoIdent $ \aid ->
+    arr (,aid) >>> withStore (f aid . arr fst)
+
+-- | Any rope whose core provides caching can run cached tasks. The task is
+-- identified by its position in the pipeline
+caching' :: (Arrow core, ProvidesPosCaching core, CS.ContentHashable Identity a, Show a, Store b)
+         => Rope r mantle core a b -> Rope r mantle core a b
+caching' = mapRopeCore withStore'
+
+-- | Any rope whose core provides caching can run cached tasks. The task is
+-- identified by an explicit name
+caching :: (Arrow core, ProvidesCaching core, CS.ContentHashable Identity a, Show a, Store b)
+        => T.Text -> Rope r mantle core a b -> Rope r mantle core a b
+caching n r = arr (,n) >>> mapRopeCore withStore (r . arr fst)
 
 -- | Used by option parser and logger, to know where the option and line to log
 -- comes from
@@ -305,12 +349,14 @@ expandSolTimes st =
 -- their vega-lite visualizations to html files (the folder to write in will be
 -- determined by the current namespace).
 interpretODESolving
-  :: ODESolving a b
+  :: Bool  -- ^ Whether to write results
+  -> ODESolving a b
   -> AnyRopeWith '[ '("options", GetOpt), '("logger",Logger), '("files",FileAccess) ]
                  '[Arrow] a b
-interpretODESolving mdl = proc params -> do
+interpretODESolving writeResults odeSolving = proc params -> do
   -- We ask for an override of the initial conditions:
-  ics <- getOpt "ics" ("Initial conditions for variables "++show (odeVarNames mdl)) (Just $ odeInitConds mdl) -< ()
+  ics <- getOpt "ics" ("Initial conditions for variables "++show (odeVarNames odeSolving))
+         (Just $ odeInitConds odeSolving) -< ()
   -- We ask for some parameters related to the simulation process:
   times <- appToArrow $ SolTimes
     <$> getOptA "start" "T0 of simulation" (Just 0)
@@ -324,15 +370,17 @@ interpretODESolving mdl = proc params -> do
   -- Finally we can solve the system:
   strand #logger Log -< "Start solving"
   let timeVec = expandSolTimes times
-      resMtx = solveWith solvingAlg (odeSystem mdl params) ics timeVec
-  strand #logger Log -< resMtx `deepseq` "Done solving"
-  strand #files $ WriteFile "res" "csv" -<
-    mkHeader (odeVarNames mdl) <> encodeMatrix (L.asColumn timeVec L.||| resMtx)
-  -- We write the time vector as first column in the CSV
-  viz <- genViz -< (timeVec, odeVarNames mdl, resMtx)
-  strand #files $ WriteFile "viz" "html" -< LTE.encodeUtf8 $ VL.toHtml $ viz
-  returnA -< odePostProcess mdl timeVec resMtx
+      resMtx = solveWith solvingAlg (odeSystem odeSolving params) ics timeVec
+  (if writeResults then writeRes else arr (const ())) -< (timeVec, resMtx)
+  returnA -< odePostProcess odeSolving timeVec resMtx
   where
+    writeRes = proc (timeVec, resMtx) -> do
+      strand #logger Log -< resMtx `deepseq` "Done solving"
+      strand #files $ WriteFile "res" "csv" -<
+        mkHeader (odeVarNames odeSolving) <> encodeMatrix (L.asColumn timeVec L.||| resMtx)
+        -- We write the time vector as first column in the CSV
+      viz <- genViz -< (timeVec, odeVarNames odeSolving, resMtx)
+      strand #files $ WriteFile "viz" "html" -< LTE.encodeUtf8 $ VL.toHtml $ viz
     mkHeader vars = LTE.encodeUtf8 $ LT.fromStrict $
       "Time," <> T.intercalate "," vars <> "\r\n"
 
@@ -344,14 +392,14 @@ nsPrefix ns beg sep end = beg <> intercalate sep ns <> end
 
 -- | Run a Console effect in any effect that can access a namespace and an
 -- AutoIdent
-interpretLogger :: (HasAutoIdent (Kleisli IO) eff)
+interpretLogger :: (HasAutoIdent eff' eff, HasKleisli IO eff')
                 => Logger a b -> (Reader Namespace ~> eff) a b
 interpretLogger Log =
   reading $ \ns ->  -- We need the namespace as for each line logged, we
                             -- want to print in which namespace it was logged
     liftAutoIdent $ \ai ->
       let pref = nsPrefix ns "" "." ""<>"["<>show ai<>"]>> "
-      in Kleisli $ putStrLn . (pref <>)
+      in liftKleisli $ putStrLn . (pref <>)
 
 -- | Weave a FileAccess into any rope with our CoreEff that can access options
 -- (to give the option to rebind the default file path), a logger (to log when a
@@ -452,7 +500,7 @@ pipeline =
   addToNamespace "chem"
     (getOpt "k" "Left-to-right reaction rate" (Just 2)
      >>>
-     caching Nothing (strand #ode chemical))
+     caching' (strand #ode chemical))
      -- Any option, any change as to where to write simulation results will
      -- invalidate the cache, and make the content of the 'caching' block to be
      -- re-executed. 'Nothing' here means this task is not named, so caching
@@ -464,7 +512,7 @@ pipeline =
     log s = arr (const s) >>> strand #logger Log
     vdp = getOpt "mu" "µ parameter" (Just 2)
           >>>
-          caching (Just "vanderpol") (strand #ode vanderpol)
+          caching "vanderpol" (strand #ode vanderpol)
           -- This task has an identifier for caching purposes, therefore it will
           -- not use auto-ident. This means that if its 2 uses in the pipeline
           -- are parameterized exactly the same, only the first one will be
@@ -487,29 +535,10 @@ type CoreEff =
             -- flags' names are conditioned on the current namespace
   ~> Writer CachingContext -- Accumulate the context needed to know what to take
                            -- into account to perform caching
-  ~> Reader CS.ContentStore -- Get the content store, to cache computation at
+  ~> AutoIdent   -- Get an identifier for the task
+     (   Reader CS.ContentStore -- Get the content store, to cache computation at
                             -- runtime
-  ~> AutoIdent  -- Get an identifier for the task
-      (Kleisli IO) -- This is the runtime layer, the one the pipeline executes in
-
--- | When we want to perform a cached task, we need to access the current
--- CachingContext before, so we need to do some newtype juggling
-instance Cacheable CoreEff where
-  caching mbName =
-    mapReader $ \_ ->
-    mapCayleyEff $
-    mapWriter_ $ \cachingContext ->
-    mapReader $ \store (AutoIdent f) ->
-      AutoIdent $ \ai ->
-        case f ai of
-          Kleisli act -> Kleisli $ \input ->
-            let ident = case mbName of Nothing -> Left ai
-                                       Just n -> Right n
-                -- Using ident as phantom input for now as actual cas-store
-                -- cacher ident must be Integer
-            in CS.cacheKleisliIO
-                 (Just 1) (CS.defaultCacherWithIdent 1) Remote.NoCache store
-                 (\(i,_,_) -> act i) (input,ident,cachingContext)
+      ~> Kleisli IO) -- This is the runtime layer, the one the pipeline executes in
 
 main :: IO ()
 main = do
@@ -520,7 +549,7 @@ main = do
       parserLayer =
           pipeline & loosen
             -- Interpret mantle:
-            & weave  #ode     (.interpretODESolving)
+            & weave  #ode     (.interpretODESolving True)
                -- interpretODESolving needs #logger and #options, so it must be
                -- weaved before them
             & weave  #files   interpretFileAccess'
@@ -538,7 +567,7 @@ main = do
       header "A kernmantle pipeline solving chemical models")
   CS.withStore [absdir|/tmp/_store|] $ \store -> do
     -- Once we have the store, we can execute the rest of the layers:
-    storeLayer & runReader store    -- Remove the ContentStore layer
-               & runAutoIdent -- Remove the AutoIdent layer
+    storeLayer & runAutoIdent -- Remove the AutoIdent layer
+               & runReader store    -- Remove the ContentStore layer
                & perform ()    -- Finally, run the IO
   return ()
