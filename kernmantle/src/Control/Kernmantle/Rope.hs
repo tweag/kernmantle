@@ -74,7 +74,6 @@ where
 
 import Control.Category
 import Control.Arrow
-import Control.Lens (over)
 import Data.Bifunctor
 import Data.Biapplicative
 import Data.Bifunctor.Tannen
@@ -83,6 +82,7 @@ import Data.Profunctor hiding (rmap)
 import Data.Profunctor.Sieve
 import Data.Profunctor.SieveTrans
 import Data.Profunctor.Traversing
+import Data.Profunctor.Unsafe ((#.))
 import Data.Vinyl hiding ((<+>))
 import Data.Vinyl.ARec
 import Data.Vinyl.Functor
@@ -152,6 +152,8 @@ mapStrand :: (InRope l eff (Rope r m c))
           => Label l -> (eff :-> eff) -> Rope r m c :-> Rope r m c
 mapStrand l f rope =
   mkRope $ runRope rope . over (rlensfL l) (\(Weaver w) -> Weaver $ w . f)
+  where
+    over l f = getIdentity #. l (Identity #. f) -- we don't depend on lens
 {-# INLINE mapStrand #-}
 
 -- | Tells whether a collection of @strands@ is in a 'Rope'.

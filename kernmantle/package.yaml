@@ -22,14 +22,10 @@ description:         Please see the README on GitHub at <https://github.com/YPar
 dependencies:
 - base >= 4.7 && < 5
 - bifunctors
-- containers
 - profunctors >= 5.5.2 # Needed to have the whole set of Cayley instances
-- comonad
 - vinyl >= 0.11
 - transformers
 - safe-exceptions
-- store
-- lens
 
 library:
   source-dirs: src
