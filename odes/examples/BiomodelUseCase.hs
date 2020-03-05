@@ -209,8 +209,7 @@ class Namespaced eff where
 -- interpreted in some @Cayley (Reader Namespace)@ because they need a namespace
 -- to construct their effects
 instance Namespaced (Reader Namespace ~> eff) where
-  addToNamespace n eff = reading $ \ns ->
-                           runReader (ns++[n]) eff
+  addToNamespace n = mapReader $ \ns -> (ns++[n],)
 
 -- | Any rope whose core has namespacing has namespacing too
 instance (Namespaced core) => Namespaced (Rope r m core) where
@@ -474,7 +473,7 @@ main = do
   let interpretFileAccess' toCore fileAccessEffect =
         -- We need to get the namespace to invoke 'interpretFileAccess'
         reading $ \ns ->
-            runReader ns $ toCore $ interpretFileAccess ns fileAccessEffect
+          runReader ns $ toCore $ interpretFileAccess ns fileAccessEffect
       parserLayer =
           pipeline & loosen
             -- Interpret mantle:

@@ -75,7 +75,7 @@ data StoreWithId = StoreWithId CS.ContentStore (Maybe Int)
 instance (MonadIO m, MonadBaseControl IO m, MonadMask m)
   => ProvidesCaching (Reader StoreWithId ~> Kleisli m) where
   usingStore =
-    mapReader $ \(StoreWithId store pipelineId) ->
+    mapReader_ $ \(StoreWithId store pipelineId) ->
     mapKleisli $ \act input ->
       CS.cacheKleisliIO
        pipelineId (CS.defaultCacherWithIdent 1) Remote.NoCache store

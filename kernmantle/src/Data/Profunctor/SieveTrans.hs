@@ -100,10 +100,18 @@ reading :: (t -> eff a b) -> (Reader t ~> eff) a b
 reading f = Cayley $ R.reader $ f
 {-# INLINE reading #-}
 
-mapReader :: (t -> eff a b -> eff' a' b')
+mapReader_ :: (t -> eff a b -> eff' a' b')
+           -> (Reader t ~> eff) a b
+           -> (Reader t ~> eff') a' b'
+mapReader_ f (Cayley eff) = Cayley (R.reader $ \x -> f x $ R.runReader eff x)
+{-# INLINE mapReader_ #-}
+
+mapReader :: (t' -> eff a b -> (t, eff' a' b'))
           -> (Reader t ~> eff) a b
-          -> (Reader t ~> eff') a' b'
-mapReader f (Cayley eff) = Cayley (R.reader $ \x -> f x $ R.runReader eff x)
+          -> (Reader t' ~> eff') a' b'
+mapReader f (Cayley eff) = Cayley (R.reader $ \t' ->
+  let (t,eff') = f t' $ R.runReader eff t
+  in eff')
 {-# INLINE mapReader #-}
 
 runReader :: t -> (Reader t ~> eff) a b -> eff a b
@@ -114,9 +122,9 @@ writing :: w -> eff :-> (Writer w ~> eff)
 writing w eff = Cayley $ W.writer (eff, w)
 {-# INLINE writing #-}
 
-mapWriter :: (w -> eff a b -> (w,eff' a' b'))
+mapWriter :: (w -> eff a b -> (w',eff' a' b'))
           -> (Writer w ~> eff) a b
-          -> (Writer w ~> eff') a' b'
+          -> (Writer w' ~> eff') a' b'
 mapWriter f (Cayley act) = Cayley $ case W.runWriter act of
   (eff,w) -> W.writer $ swap $ f w eff
 {-# INLINE mapWriter #-}
