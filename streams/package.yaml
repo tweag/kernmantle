@@ -1,0 +1,25 @@
+name:                kernmantle-streams
+version:             0.1.0.0
+github:              "YPares/kernmantle"
+license:             BSD3
+author:              "Yves Parès"
+maintainer:          "yves.pares@gmail.com"
+copyright:           "2019 Yves Parès"
+
+# Metadata used when publishing your package
+synopsis:            Process streams using a Rope
+category:            Control
+
+# To avoid duplicated efforts in documentation and dealing with the
+# complications of embedding Haddock markup inside cabal files, it is
+# common to point users to the README.md file.
+description:         Please see the README on GitHub at <https://github.com/YPares/kernmantle#readme>
+
+dependencies:
+- base >= 4.7 && < 5
+- kernmantle
+- streaming
+
+library:
+  source-dirs: src
+

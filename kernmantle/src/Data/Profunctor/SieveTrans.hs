@@ -89,7 +89,10 @@ fmapping a f = Cayley $ fmap f a
 
 -- | mapCayley in profunctors maps the functor. mapCayleyEff maps the effect in
 -- it.
-mapCayleyEff :: (Functor f) => (eff a b -> eff' a' b') -> (f ~> eff) a b -> (f ~> eff') a' b'
+mapCayleyEff :: (Functor f)
+             => (eff a b -> eff' a' b')
+             -> (f ~> eff) a b
+             -> (f ~> eff') a' b'
 mapCayleyEff f (Cayley eff) = Cayley $ fmap f eff
 {-# INLINE mapCayleyEff #-}
 
@@ -119,8 +122,8 @@ mapWriter f (Cayley act) = Cayley $ case W.runWriter act of
 {-# INLINE mapWriter #-}
 
 mapWriter_ :: (w -> eff a b -> eff' a' b')
-          -> (Writer w ~> eff) a b
-          -> (Writer w ~> eff') a' b'
+           -> (Writer w ~> eff) a b
+           -> (Writer w ~> eff') a' b'
 mapWriter_ f = mapWriter (\w e -> (w,f w e))
 {-# INLINE mapWriter_ #-}
 

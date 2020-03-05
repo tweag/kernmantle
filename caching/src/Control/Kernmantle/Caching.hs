@@ -99,9 +99,9 @@ instance (Arrow eff, ProvidesCaching eff) => ProvidesPosCaching (AutoIdent eff) 
     arr (,aid) >>> usingStore (f aid . arr fst)
 
 instance (ProvidesCaching core) => ProvidesCaching (Rope r m core) where
-  usingStore r = mkRope $ \w -> usingStore (runRope r w)
+  usingStore = mapRopeCore usingStore
 instance (ProvidesPosCaching core) => ProvidesPosCaching (Rope r m core) where
-  usingStore' r = mkRope $ \w -> usingStore' (runRope r w)
+  usingStore' = mapRopeCore usingStore'
 
 -- | Any rope whose core provides caching can run cached tasks. The task is
 -- identified by its position in the pipeline
