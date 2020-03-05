@@ -22,8 +22,8 @@ More detailed information about the interest of this paradigm in the context of 
 
 ## To build
 
-Recommended way is to use nix. Run `nix-shell` and in the shell just run `cabal
-new-build`. Stack config might not be up to date.
+Recommended way is to use stack.
+Nix config might not be up to date.
 
 
 ## Why yet another effects library??
