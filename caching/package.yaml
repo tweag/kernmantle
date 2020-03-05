@@ -1,4 +1,4 @@
-name:                kernmantle
+name:                kernmantle-caching
 version:             0.1.0.0
 github:              "YPares/kernmantle"
 license:             BSD3
@@ -6,12 +6,8 @@ author:              "Yves Parès"
 maintainer:          "yves.pares@gmail.com"
 copyright:           "2019 Yves Parès"
 
-extra-source-files:
-- README.md
-- ChangeLog.md
-
 # Metadata used when publishing your package
-synopsis:            Composing Applicatives, Monads, Comonads and Arrows into Arrows
+synopsis:            Cache parts of a Kernmantle pipeline
 category:            Control
 
 # To avoid duplicated efforts in documentation and dealing with the
@@ -21,41 +17,31 @@ description:         Please see the README on GitHub at <https://github.com/YPar
 
 dependencies:
 - base >= 4.7 && < 5
-- bifunctors
-- containers
-- profunctors >= 5.5.2 # Needed to have the whole set of Cayley instances
-- comonad
-- vinyl >= 0.11
-- transformers
-- safe-exceptions
+- path
+- path-io
 - store
-- lens
+- cas-hashable
+- cas-store
 
 library:
   source-dirs: src
 
 executables:
-  ex1:
-    main: examples/Ex1.hs
+  exCaching:
+    main: examples/ExCaching.hs
     dependencies:
       - kernmantle
-  exBuilder:
-    main: examples/ExBuilder.hs
-    dependencies:
-      - kernmantle
-  exCli:
-    main: examples/ExCli.hs
-    dependencies:
-      - kernmantle
+      - kernmantle-caching
       - optparse-applicative
+      - containers
+      - bytestring
+      - profunctors
+  exCaching2:
+    main: examples/ExCaching2.hs
+    dependencies:
+      - kernmantle
+      - kernmantle-caching
+      - optparse-applicative
+      - transformers
       - profunctors
       - bytestring
-  exLenses:
-    main: examples/ExLenses.hs
-    dependencies:
-      - kernmantle
-      - profunctors
-      - lens
-      - unordered-containers
-      - aeson
-      - lens-aeson
