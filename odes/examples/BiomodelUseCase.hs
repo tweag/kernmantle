@@ -482,8 +482,8 @@ chemical =  -- Input param is the reaction rate and we don't want post-processin
   dimap (\k -> (k, k/2)) (const ()) $
     chemicalToODESolving $
       ChemicalModel (M.fromList [("H20",1)])
-                    (M.fromList [("H+",2), ("O-",1)])
-                    (M.fromList [("H20",1), ("H+",0), ("O-",0)])
+                    (M.fromList [("H+",2), ("O2-",1)])
+                    (M.fromList [("H20",1), ("H+",0), ("O2-",0)])
 
 -- | The final pipeline to run. It solves two models to show that the same
 -- tooling can be used to solve 2 models in the same pipeline with no risks of
