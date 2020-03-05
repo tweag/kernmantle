@@ -441,7 +441,7 @@ pipeline =
     log s = arr (const s) >>> strand #logger Log
     vdp = getOpt "mu" "µ parameter" (Just 2)
           >>>
-          caching "vanderpol" (strand #ode vanderpol)
+          caching ("vanderpol"::String) (strand #ode vanderpol)
           -- This task has an identifier for caching purposes, therefore it will
           -- not use auto-ident. This means that if its 2 uses in the pipeline
           -- are parameterized exactly the same, only the first one will be
@@ -497,6 +497,6 @@ main = do
   withStore [absdir|/tmp/_store|] $ \store -> do
     -- Once we have the store, we can execute the rest of the layers:
     storeLayer & runAutoIdent -- Remove the AutoIdent layer
-               & runReader store    -- Remove the ContentStore layer
+               & runReader (StoreWithId store (Just 1)) -- Remove the ContentStore layer
                & perform ()    -- Finally, run the IO
   return ()

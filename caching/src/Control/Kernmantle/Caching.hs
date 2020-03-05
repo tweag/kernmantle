@@ -13,6 +13,7 @@ module Control.Kernmantle.Caching
   , ProvidesPosCaching (..)
   , AutoIdent (..)
   , SomeHashable (..)
+  , StoreWithId (..)
   , CachingContext
   , CS.withStore
   , caching, caching'
@@ -50,13 +51,13 @@ instance Show SomeHashable where
 
 -- | A class to cache part of the pipeline
 class ProvidesCaching eff where
-  usingStore :: (CS.ContentHashable Identity a, Show a, Store b)
+  usingStore :: (CS.ContentHashable Identity a, Store b)
             => eff a b
             -> eff a b
 -- | A class to cache part of the pipeline where the hash can depend on the
 -- position of the task in the pipeline
 class (ProvidesCaching eff) => ProvidesPosCaching eff where
-  usingStore' :: (CS.ContentHashable Identity a, Show a, Store b)
+  usingStore' :: (CS.ContentHashable Identity a, Store b)
              => eff a b
              -> eff a b
 
@@ -67,13 +68,17 @@ instance {-# OVERLAPPABLE #-} (Functor f, ProvidesPosCaching eff)
   => ProvidesPosCaching (f ~> eff) where
   usingStore' (Cayley f) = Cayley $ fmap usingStore' f
 
+-- | Bundles together a identifier for the whole pipeline. If identifier is
+-- Nothing, no caching will be performed.
+data StoreWithId = StoreWithId CS.ContentStore (Maybe Int)
+
 instance (MonadIO m, MonadBaseControl IO m, MonadMask m)
-  => ProvidesCaching (Reader CS.ContentStore ~> Kleisli m) where
+  => ProvidesCaching (Reader StoreWithId ~> Kleisli m) where
   usingStore =
-    mapReader $ \store ->
+    mapReader $ \(StoreWithId store pipelineId) ->
     mapKleisli $ \act input ->
       CS.cacheKleisliIO
-       (Just 1) (CS.defaultCacherWithIdent 1) Remote.NoCache store
+       pipelineId (CS.defaultCacherWithIdent 1) Remote.NoCache store
        act input
 
 instance (Arrow eff, ProvidesCaching eff)
@@ -105,7 +110,9 @@ caching' :: (ProvidesPosCaching core, CS.ContentHashable Identity a, Show a, Sto
 caching' = mapRopeCore usingStore'
 
 -- | Any rope whose core provides caching can run cached tasks. The task is
--- identified by an explicit name
-caching :: (Arrow core, ProvidesCaching core, CS.ContentHashable Identity a, Show a, Store b)
-        => String -> Rope r mantle core a b -> Rope r mantle core a b
+-- identified by an explicit identifier
+caching :: (Arrow core, ProvidesCaching core
+           ,CS.ContentHashable Identity ident, CS.ContentHashable Identity a
+           ,Store b)
+        => ident -> Rope r mantle core a b -> Rope r mantle core a b
 caching n r = arr (,n) >>> mapRopeCore usingStore (r . arr fst)
