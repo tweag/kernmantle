@@ -28,8 +28,11 @@
 -- that 'Strand' with the 'strand' function.
 
 module Control.Kernmantle.Rope
-  ( -- * Rope
-    Rope
+  ( -- * Re-exports
+    module Data.Profunctor.SieveTrans
+  , Cayley (..)
+    -- * Rope
+  , Rope
   , TightRope
   , LooseRope
   , tighten
@@ -45,9 +48,6 @@ module Control.Kernmantle.Rope
   , AllInMantle
   , strand
   , mapStrand
-  , liftKleisli
-  , liftKleisliIO
-  , mapKleisli
   , runSieveCore
     -- * Rope Interpretation
   , weave
@@ -62,13 +62,12 @@ module Control.Kernmantle.Rope
   , LooseRopeWith
   , Entwines
   , SatisfiesAll
-  , SieveTrans (..)
-  , HasKleisli
-  , HasKleisliIO
     -- * Reexports
   , type (:->)
   , Label, fromLabel
   , (&)
+  , mkRope
+  , runRope
   )
 where
 
@@ -79,6 +78,7 @@ import Data.Biapplicative
 import Data.Bifunctor.Tannen
 import Data.Function ((&))
 import Data.Profunctor hiding (rmap)
+import Data.Profunctor.Cayley (Cayley (..))
 import Data.Profunctor.Sieve
 import Data.Profunctor.SieveTrans
 import Data.Profunctor.Traversing

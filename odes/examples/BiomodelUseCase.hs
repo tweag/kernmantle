@@ -34,14 +34,12 @@
 import Prelude hiding (id, (.))
 
 import Control.Kernmantle.Arrow
+import Control.Kernmantle.Caching
 import Control.Kernmantle.Rope
 import Control.Arrow
 import Control.Category
 import Control.DeepSeq (deepseq)
 import Control.Monad.IO.Class
-import qualified Data.CAS.ContentHashable as CS
-import qualified Data.CAS.ContentStore as CS
-import qualified Data.CAS.RemoteCache as Remote
 import Data.Csv.HMatrix
 import Data.Functor.Identity (Identity)
 import Data.Functor.Compose
@@ -50,7 +48,6 @@ import Data.Maybe (fromJust)
 import Data.Profunctor
 import Data.Profunctor.Cayley
 import Data.Profunctor.SieveTrans
-import Data.Store (Store)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as LT
 import qualified Data.Text.Lazy.Encoding as LTE
@@ -171,7 +168,7 @@ chemicalToODESolving chemMdl =
 -- | An effect to ask for some parameter's value
 data GetOpt a b where
   -- | Get a raw string option
-  GetOpt :: (Show b, Typeable b, CS.ContentHashable Identity b)
+  GetOpt :: (Show b, Typeable b, ContentHashable Identity b)
              -- So we can show the default value and its type, and add the
              -- selected value to the cache context
          => ReadM b  -- ^ How to parse the option
@@ -180,7 +177,7 @@ data GetOpt a b where
          -> Maybe b  -- ^ Default value
          -> GetOpt a b  -- ^ Returns final value
   -- | Ask to select between alternatives
-  Switch :: (Show b, CS.ContentHashable Identity b)
+  Switch :: (Show b, ContentHashable Identity b)
          => (String, String, b) -- ^ Name and docstring of default
          -> [(String, String, b)]
             -- ^ Names and docstrings of alternatives
@@ -198,74 +195,6 @@ data FileAccess a b where
 -- | The Console effect
 data Logger a b where
   Log :: Logger String ()
-
-instance CS.ContentHashable Identity SplitId
-instance CS.ContentHashable Identity ArrowIdent
-
-data SomeHashable where
-  SomeHashable ::
-    (CS.ContentHashable Identity a, Show a) => a -> SomeHashable
-instance CS.ContentHashable Identity SomeHashable where
-  contentHashUpdate ctx (SomeHashable a) = CS.contentHashUpdate ctx a
-type CachingContext = [SomeHashable]
-instance Show SomeHashable where
-  show (SomeHashable a) = show a
-
-
--- | A class to cache part of the pipeline
-class ProvidesCaching eff where
-  withStore :: (CS.ContentHashable Identity a, Show a, Store b)
-            => eff a b
-            -> eff a b
--- | A class to cache part of the pipeline where the hash can depend on the
--- position of the task in the pipeline
-class (ProvidesCaching eff) => ProvidesPosCaching eff where
-  withStore' :: (CS.ContentHashable Identity a, Show a, Store b)
-             => eff a b
-             -> eff a b
-
-instance {-# OVERLAPPABLE #-} (Functor f, ProvidesCaching eff)
-  => ProvidesCaching (f ~> eff) where
-  withStore (Cayley f) = Cayley $ fmap withStore f
-instance {-# OVERLAPPABLE #-} (Functor f, ProvidesPosCaching eff)
-  => ProvidesPosCaching (f ~> eff) where
-  withStore' (Cayley f) = Cayley $ fmap withStore' f
-
-instance ProvidesCaching (Reader CS.ContentStore ~> Kleisli IO) where
-  withStore =
-    mapReader $ \store ->
-    mapKleisli $ \act input ->
-      CS.cacheKleisliIO
-       (Just 1) (CS.defaultCacherWithIdent 1) Remote.NoCache store
-       act input
-
-instance (Arrow eff, ProvidesCaching eff) => ProvidesCaching (Writer CachingContext ~> eff) where
-  withStore =
-    mapWriter_ $ \newContext eff ->
-      arr (,newContext) >>> withStore (eff . arr fst)
-      -- New context is just added as phantom input to the underlying effect
-instance (Arrow eff, ProvidesPosCaching eff) => ProvidesPosCaching (Writer CachingContext ~> eff) where
-  withStore' =
-    mapWriter_ $ \newContext eff ->
-      arr (,newContext) >>> withStore' (eff . arr fst)
-
-instance (Arrow eff, ProvidesCaching eff) => ProvidesCaching (AutoIdent eff) where
-  withStore (AutoIdent f) = AutoIdent $ withStore . f
-instance (Arrow eff, ProvidesCaching eff) => ProvidesPosCaching (AutoIdent eff) where
-  withStore' (AutoIdent f) = AutoIdent $ \aid ->
-    arr (,aid) >>> withStore (f aid . arr fst)
-
--- | Any rope whose core provides caching can run cached tasks. The task is
--- identified by its position in the pipeline
-caching' :: (Arrow core, ProvidesPosCaching core, CS.ContentHashable Identity a, Show a, Store b)
-         => Rope r mantle core a b -> Rope r mantle core a b
-caching' = mapRopeCore withStore'
-
--- | Any rope whose core provides caching can run cached tasks. The task is
--- identified by an explicit name
-caching :: (Arrow core, ProvidesCaching core, CS.ContentHashable Identity a, Show a, Store b)
-        => T.Text -> Rope r mantle core a b -> Rope r mantle core a b
-caching n r = arr (,n) >>> mapRopeCore withStore (r . arr fst)
 
 -- | Used by option parser and logger, to know where the option and line to log
 -- comes from
@@ -332,7 +261,7 @@ data SolTimes = SolTimes { solStart      :: Double
 
 data ODESolvingAlgorithm = CVode | ARKode
   deriving (Show, Generic)
-instance (Monad m) => CS.ContentHashable m ODESolvingAlgorithm
+instance (Monad m) => ContentHashable m ODESolvingAlgorithm
 
 solveWith CVode = CV.odeSolve
 solveWith ARKode = ARK.odeSolve
@@ -427,7 +356,7 @@ interpretFileAccess ns (WriteFile name ext) = proc content -> do
 -- | Performs an action in a functor, adds this action result to
 -- the caching context, and returns the result in the underlying effect
 addingToCachingContext
-  :: (CS.ContentHashable Identity b, Show b, Functor f, Arrow eff)
+  :: (ContentHashable Identity b, Show b, Functor f, Arrow eff)
   => f b  -- ^ Action to get the value to add
   -> (f ~> Writer CachingContext ~> eff) a b
 addingToCachingContext getValue =
@@ -528,7 +457,7 @@ pipeline =
 --
 -- This type is completely equivalent to:
 -- CoreEff a b =
---   Namespace -> Parser (CachingContext, CS.ContentStore -> ArrowIdent -> a -> IO b)
+--   Namespace -> Parser (CachingContext, ContentStore -> ArrowIdent -> a -> IO b)
 type CoreEff =
      Reader Namespace -- Get the namespace we are in
   ~> Parser -- Accumulate all the wanted options and get them from CLI. The CLI
@@ -536,7 +465,7 @@ type CoreEff =
   ~> Writer CachingContext -- Accumulate the context needed to know what to take
                            -- into account to perform caching
   ~> AutoIdent   -- Get an identifier for the task
-     (   Reader CS.ContentStore -- Get the content store, to cache computation at
+     (   Reader ContentStore -- Get the content store, to cache computation at
                             -- runtime
       ~> Kleisli IO) -- This is the runtime layer, the one the pipeline executes in
 
@@ -565,7 +494,7 @@ main = do
     -- parserLayer needs IO to be executed:
     execParser (info (helper <*> parserLayer) $
       header "A kernmantle pipeline solving chemical models")
-  CS.withStore [absdir|/tmp/_store|] $ \store -> do
+  withStore [absdir|/tmp/_store|] $ \store -> do
     -- Once we have the store, we can execute the rest of the layers:
     storeLayer & runAutoIdent -- Remove the AutoIdent layer
                & runReader store    -- Remove the ContentStore layer

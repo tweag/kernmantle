@@ -1,4 +1,4 @@
-name:                kernmantle-caching
+name:                kernmantle-batteries
 version:             0.1.0.0
 github:              "YPares/kernmantle"
 license:             BSD3
@@ -7,7 +7,7 @@ maintainer:          "yves.pares@gmail.com"
 copyright:           "2019 Yves Parès"
 
 # Metadata used when publishing your package
-synopsis:            Cache parts of a Kernmantle pipeline via cas-store
+synopsis:            Several utilities to make real-life workflows with kernmantle
 category:            Control
 
 # To avoid duplicated efforts in documentation and dealing with the
@@ -18,33 +18,8 @@ description:         Please see the README on GitHub at <https://github.com/YPar
 dependencies:
 - base >= 4.7 && < 5
 - kernmantle
-- path
-- path-io
-- store
-- cas-hashable
-- cas-store
-- monad-control
-- exceptions
+- async
 
 library:
   source-dirs: src
 
-executables:
-  exCaching:
-    main: examples/ExCaching.hs
-    dependencies:
-      - kernmantle
-      - kernmantle-caching
-      - optparse-applicative
-      - containers
-      - bytestring
-      - profunctors
-  exCaching2:
-    main: examples/ExCaching2.hs
-    dependencies:
-      - kernmantle
-      - kernmantle-caching
-      - optparse-applicative
-      - transformers
-      - profunctors
-      - bytestring

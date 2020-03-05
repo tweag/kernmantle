@@ -92,7 +92,7 @@ pipeline = proc () -> do
     
 -- | The core effect we need to collect all our options and build the
 -- corresponding CLI Parser, and hold the store for caching.
-type CoreEff = Cayley Parser (Kleisli (ReaderT CS.ContentStore IO))
+type CoreEff = Parser ~> Kleisli (ReaderT CS.ContentStore IO)
 
 instance WithCaching CoreEff where
   cache c = mapKleisli (\act i -> do
