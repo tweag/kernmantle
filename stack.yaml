@@ -30,6 +30,7 @@ resolver: lts-14.27
 #   - wai
 packages:
 - kernmantle
+- batteries
 - caching
 - streams
 - odes

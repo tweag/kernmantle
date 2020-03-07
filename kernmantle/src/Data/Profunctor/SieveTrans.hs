@@ -7,8 +7,8 @@
 {-# LANGUAGE TypeOperators          #-}
 {-# LANGUAGE RankNTypes             #-}
 
--- | SieveTrans exposes the SieveTrans class and some Sieve transformer based on
--- usual Reader and Writer
+-- | This module exposes the SieveTrans class and some Sieve transformers based
+-- on usual Reader and Writer
 
 module Data.Profunctor.SieveTrans where
 
@@ -22,61 +22,56 @@ import qualified Control.Monad.Trans.Reader as R
 import qualified Control.Monad.Trans.Writer.Strict as W
 
 
--- | A general version of 'MonadIO' for profunctors and categories
-class SieveTrans sieve cat | cat -> sieve where
-  liftSieve :: sieve a b -> cat a b
-  mapSieve :: (sieve a b -> sieve a' b') -> cat a b -> cat a' b'
+-- | A general version of 'Sieve' that allows mapping and recursively reaching
+-- the sieve
+class SieveTrans f cat | cat -> f where
+  liftSieve :: (a -> f b) -> cat a b
+  mapSieve :: ((a -> f b) -> (a' -> f b')) -> cat a b -> cat a' b'
 
-instance SieveTrans (Star f) (Star f) where
-  liftSieve = id
-  mapSieve = ($)
+-- | Just an alias
+type HasKleisli = SieveTrans
 
-instance SieveTrans (Kleisli m) (Kleisli m) where
-  liftSieve = id
-  mapSieve = ($)
+-- | Just an alias
+liftKleisli :: (HasKleisli m eff) => (a -> m b) -> eff a b
+liftKleisli = liftSieve
+{-# INLINE liftKleisli #-}
 
-instance (SieveTrans sieve cat, Applicative f)
-  => SieveTrans sieve (Cayley f cat) where
+-- | Just an alias
+mapKleisli :: (HasKleisli m eff)
+           => ((a -> m b) -> (a' -> m b')) -> eff a b -> eff a' b'
+mapKleisli = mapSieve
+{-# INLINE mapKleisli #-}
+
+instance SieveTrans f (Star f) where
+  liftSieve = Star
+  mapSieve f (Star m) = Star $ f m
+
+instance SieveTrans m (Kleisli m) where
+  liftSieve = Kleisli
+  mapSieve f (Kleisli m) = Kleisli $ f m
+
+instance (SieveTrans f cat, Applicative f')
+  => SieveTrans f (Cayley f' cat) where
   liftSieve = Cayley . pure . liftSieve
   {-# INLINE liftSieve #-}
   mapSieve f (Cayley app) = Cayley $ mapSieve f <$> app
   {-# INLINE mapSieve #-}
 
-instance (SieveTrans sieve cat, Applicative f)
-  => SieveTrans sieve (Tannen f cat) where
+instance (SieveTrans f cat, Applicative f)
+  => SieveTrans f (Tannen f cat) where
   liftSieve = Tannen . pure . liftSieve
   {-# INLINE liftSieve #-}
   mapSieve f (Tannen app) = Tannen $ mapSieve f <$> app
   {-# INLINE mapSieve #-}
-  
-type HasKleisli m = SieveTrans (Kleisli m)
-type HasStar f = SieveTrans (Star f)
-
-liftKleisli :: (HasKleisli m eff) => (a -> m b) -> eff a b
-liftKleisli = liftSieve . Kleisli
-{-# INLINE liftKleisli #-}
-
-mapKleisli :: (HasKleisli m eff)
-           => ((a -> m b) -> (a' -> m b')) -> eff a b -> eff a' b'
-mapKleisli f = mapSieve (Kleisli . f . runKleisli)
-{-# INLINE mapKleisli #-}
-
-liftStar :: (HasStar f eff) => (a -> f b) -> eff a b
-liftStar = liftSieve . Star
-{-# INLINE liftStar #-}
-
-mapStar :: (HasStar m eff)
-        => ((a -> m b) -> (a -> m b)) -> eff a b -> eff a b
-mapStar f = mapSieve (Star . f . runStar)
-{-# INLINE mapStar #-}
 
 type HasKleisliIO m eff = (HasKleisli m eff, MonadIO m)
 
+-- | When you want to lift some IO action in a Sieve of any MonadIO
 liftKleisliIO :: (HasKleisliIO m eff) => (a -> IO b) -> eff a b
 liftKleisliIO f = liftKleisli $ liftIO . f
 {-# INLINE liftKleisliIO #-}
 
-
+-- | An alias to make signatures more readable
 type (~>) = Cayley
 infixr 1 ~>  -- To be of a lower precedence than (:->)
 

@@ -19,6 +19,11 @@ dependencies:
 - base >= 4.7 && < 5
 - kernmantle
 - async
+- profunctors
+- bifunctors
+- async
+- lifted-async
+- monad-control
 
 library:
   source-dirs: src

@@ -110,7 +110,7 @@ newtype Rope (record::RopeRec) (mantle::[Strand]) (core::BinEff) a b =
            , Profunctor, Strong, Choice, Closed, Costrong, Cochoice
            , Mapping, Traversing
            , ThrowEffect ex, TryEffect ex
-           , SieveTrans sieve, HasAutoIdent eff
+           , SieveTrans f, HasAutoIdent eff
            , Bifunctor, Biapplicative
            )
 

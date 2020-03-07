@@ -80,7 +80,7 @@ newtype RopeRunner (record::RopeRec) (mantle::[Strand]) (interp::BinEff) (core::
            , Profunctor, Strong, Choice, Closed, Costrong, Cochoice
            , Mapping, Traversing
            , ThrowEffect ex, TryEffect ex
-           , SieveTrans sieve, HasAutoIdent eff )
+           , SieveTrans f, HasAutoIdent eff )
     via Cayley ((->) (record (Weaver interp) mantle)) core
   deriving (ProfunctorFunctor, ProfunctorMonad)
     via Cayley ((->) (record (Weaver interp) mantle))

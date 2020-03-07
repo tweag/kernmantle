@@ -146,7 +146,7 @@ instance (Traversing eff, ArrowChoice eff) => Traversing (AutoIdent eff) where
   traverse' (AutoIdent a) = AutoIdent $ traverse' . a
   wander f (AutoIdent a) = AutoIdent $ wander f . a
 
-instance (SieveTrans s eff) => SieveTrans s (AutoIdent eff) where
+instance (SieveTrans f eff) => SieveTrans f (AutoIdent eff) where
   liftSieve = AutoIdent . const . liftSieve
   mapSieve f (AutoIdent af) = AutoIdent $ mapSieve f . af
 
