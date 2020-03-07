@@ -110,12 +110,12 @@ main :: IO ()
 main = do
   vl <- getVerbLevel
   prog & loosen
-       & weave' #logger (\eff -> case runReader vl eff of
-                            L2 f -> arr f
-                            R2 eff -> Kleisli $ runLogger eff)
+       & weaveK #logger (\eff -> case runReader vl eff of
+                            L2 f -> return . f
+                            R2 eff -> runLogger eff)
           -- The #logger weaver is oblivious of the bypassing logic, it just
           -- gives the 'VerbLevel' to the effect
-       & weave' #console (Kleisli . runConsole)
-       & weave' #file (Kleisli . runFile)
+       & weaveK #console runConsole
+       & weaveK #file runFile
        & untwine
        & perform "You"

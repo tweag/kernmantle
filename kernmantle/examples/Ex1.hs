@@ -101,7 +101,7 @@ main = prog -- Rope ARec '[("warnConsole",Console),("console",Console),("file",F
 altMain :: IO ()
 altMain = prog & loosen
                & mergeStrands #console #warnConsole
-               & weave' #console (Kleisli . runConsole)
-               & weave' #file    (Kleisli . runFile)
+               & weaveK #console runConsole
+               & weaveK #file    runFile
                & untwine
                & perform "You"

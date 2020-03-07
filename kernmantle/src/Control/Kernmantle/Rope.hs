@@ -50,8 +50,7 @@ module Control.Kernmantle.Rope
   , strand
   , mapStrand
     -- * Rope Interpretation
-  , weave
-  , weave'
+  , weave, weave', weaveK
   , WeaveAll (..)
   , retwine
   , untwine
@@ -280,6 +279,14 @@ weave'
   -- core.
 weave' lbl interpFn = weave lbl (const interpFn)
 {-# INLINE weave' #-}
+
+-- | A shortcut for 'weave'' when your core 'HasKleisli'
+weaveK :: (HasKleisli m core)
+       => Label name
+       -> (forall a b. binEff a b -> a -> m b)
+       -> (LooseRope ('(name,binEff) ': mantle) core :-> LooseRope mantle core)
+weaveK lbl interpFn = weave' lbl (liftKleisli . interpFn)
+{-# INLINE weaveK #-}
 
 -- | Supports 'weaveAll' over any 'Rope'
 class WeaveAll mantle core where

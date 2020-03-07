@@ -117,7 +117,7 @@ prog = proc name -> do
 -- strand an directly interpret every strand in the core effect
 main :: IO ()
 main = prog & loosen
-            & weave' #console (Kleisli . runConsole)
-            & weave' #file    (Kleisli . runFile)
+            & weaveK #console runConsole
+            & weaveK #file    runFile
             & untwine
             & perform "You"
