@@ -10,7 +10,7 @@
 -- | This module exposes the SieveTrans class and some Sieve transformers based
 -- on usual Reader and Writer
 
-module Data.Profunctor.SieveTrans where
+module Data.Profunctor.Trans where
 
 import Control.Arrow
 import Control.Monad.IO.Class

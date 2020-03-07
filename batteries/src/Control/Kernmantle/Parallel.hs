@@ -22,7 +22,7 @@ import           Control.Kernmantle.Arrow
 import           Control.Kernmantle.Error
 import           Data.Profunctor
 import           Data.Profunctor.Traversing
-import           Data.Profunctor.SieveTrans
+import           Data.Profunctor.Trans
 import           Prelude                         hiding (id, (.))
 
 

@@ -47,7 +47,6 @@ import Data.List (intercalate)
 import Data.Maybe (fromJust)
 import Data.Profunctor
 import Data.Profunctor.Cayley
-import Data.Profunctor.SieveTrans
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as LT
 import qualified Data.Text.Lazy.Encoding as LTE
@@ -368,7 +367,7 @@ addingToCachingContext getValue =
 -- user to the CachingContext
 --
 -- interpretGetOpt is the only weaver that needs access to basically every layer
--- of CoreEf.f
+-- of CoreEff.
 interpretGetOpt :: (Arrow eff)
                 => GetOpt a b
                 -> (Reader Namespace ~> Parser ~> Writer CachingContext ~> eff) a b

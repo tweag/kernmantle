@@ -23,7 +23,7 @@ import Data.Profunctor.Cayley
 import Data.Profunctor.EffFunctor
 import Data.Profunctor.Monad
 import Data.Profunctor.Traversing
-import Data.Profunctor.SieveTrans
+import Data.Profunctor.Trans
 import Data.Vinyl hiding ((<+>))
 import Data.Vinyl.TypeLevel
 import GHC.TypeLits

@@ -17,7 +17,7 @@ import Control.Category
 import Data.List (uncons)
 import Data.Profunctor
 import Data.Profunctor.Cayley
-import Data.Profunctor.SieveTrans
+import Data.Profunctor.Trans
 import Data.Profunctor.Traversing
 import Data.Ratio
 import GHC.Generics

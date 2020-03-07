@@ -29,7 +29,7 @@
 
 module Control.Kernmantle.Rope
   ( -- * Re-exports
-    module Data.Profunctor.SieveTrans
+    module Data.Profunctor.Trans
   , Cayley (..)
     -- * Rope
   , Rope
@@ -79,7 +79,7 @@ import Data.Profunctor hiding (rmap)
 import Data.Profunctor.Cayley (Cayley (..))
 import Data.Profunctor.EffFunctor
 import Data.Profunctor.Sieve
-import Data.Profunctor.SieveTrans
+import Data.Profunctor.Trans
 import Data.Profunctor.Traversing
 import Data.Profunctor.Unsafe ((#.))
 import Data.Vinyl hiding ((<+>))
