@@ -22,8 +22,7 @@ dependencies:
 - profunctors
 - bifunctors
 - async
-- lifted-async
-- monad-control
+- unliftio
 
 library:
   source-dirs: src
