@@ -6,10 +6,6 @@ author:              "Yves Parès"
 maintainer:          "yves.pares@gmail.com"
 copyright:           "2019 Yves Parès"
 
-extra-source-files:
-- README.md
-- ChangeLog.md
-
 # Metadata used when publishing your package
 synopsis:            Composing Applicatives, Monads, Comonads and Arrows into Arrows
 category:            Control
