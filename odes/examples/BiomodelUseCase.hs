@@ -33,12 +33,13 @@
 
 import Prelude hiding (id, (.))
 
-import Control.Kernmantle.Arrow
-import Control.Kernmantle.Caching
-import Control.Kernmantle.Rope
 import Control.Arrow
 import Control.Category
 import Control.DeepSeq (deepseq)
+import Control.Exception
+import Control.Kernmantle.Arrow
+import Control.Kernmantle.Caching
+import Control.Kernmantle.Rope
 import Control.Monad.IO.Class
 import Data.Csv.HMatrix
 import Data.Functor.Identity (Identity)
@@ -467,6 +468,11 @@ type CoreEff =
                             -- runtime
       ~> Kleisli IO) -- This is the runtime layer, the one the pipeline executes in
 
+storePathParser = option (eitherReader $
+                          either (Left . displayException) Right . parseAbsDir) $
+  long "store" <> help "The path to the caching store. Must be an absolute directory"
+  <> metavar "ABS_PATH" <> value [absdir|/tmp/_store|]
+
 main :: IO ()
 main = do
   let interpretFileAccess' toCore fileAccessEffect =
@@ -488,13 +494,14 @@ main = do
             -- Execute core:
             & runReader [] -- Remove the namespace layer
             & runCayley    -- Get to the CLI parser
-  storeLayer <- snd . runWriter <$> -- Remove the CachingContext layer
+  (storePath, storeLayer) <-
     -- parserLayer needs IO to be executed:
-    execParser (info (helper <*> parserLayer) $
+    execParser (info (helper <*> ((,) <$> storePathParser <*> parserLayer)) $
       header "A kernmantle pipeline solving chemical models")
-  withStore [absdir|/tmp/_store|] $ \store -> do
-    -- Once we have the store, we can execute the rest of the layers:
-    storeLayer & runAutoIdent -- Remove the AutoIdent layer
-               & runReader (StoreWithId store (Just 1)) -- Remove the ContentStore layer
-               & perform ()    -- Finally, run the IO
+  withStore storePath $ \store -> do
+    -- Once we have the store, we can execute the rest of the core layers:
+    storeLayer & runWriter_   -- Remove the CachingContext layer
+               & runAutoIdent -- Remove the AutoIdent layer
+               & runReader (StoreWithId store $ Just 1) -- Remove the ContentStore layer
+               & perform () -- Finally, run the IO
   return ()
