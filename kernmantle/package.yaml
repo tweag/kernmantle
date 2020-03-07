@@ -35,8 +35,8 @@ executables:
     main: examples/Ex1.hs
     dependencies:
       - kernmantle
-  exBuilder:
-    main: examples/ExBuilder.hs
+  exBypass:
+    main: examples/ExBypass.hs
     dependencies:
       - kernmantle
   exCli:

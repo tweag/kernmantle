@@ -6,16 +6,14 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE RankNTypes #-}
 
--- BEWARE! THIS EXAMPLE IS DEPRECATED, IT WILL MOST LIKELY BE REMOVED IN THE
--- NEAR FUTURE.
+-- | In this example we show how, depending on some value read at load-time, to
+-- have a strand that is 'Sum' of effects, so that its main effect can be
+-- bypassed without the need for 'ArrowChoice'.
 
--- | In this example, we show how to condition some strand based on a _builder_
--- effect (here just accessing some config value) that will create our strands.
-
-import Control.Kernmantle.Builder
 import Control.Kernmantle.Error
 import Control.Kernmantle.Rope
 import Control.Arrow
+import Data.Bifunctor.Sum
 import Data.Functor.Compose
 import System.Environment (getArgs)
 
@@ -53,35 +51,31 @@ runFile cmd inp = case cmd of
 data VerbLevel = Silent | Error | Warning | Info
   deriving (Eq, Ord, Bounded, Show, Read)
 
--- | A builder effect to deactivate some effects depending on some verbosity
--- level. It builds an @eff@ that can be bypassed (via 'Bypass') by a simple
--- function.
---
--- This builder input is a 'VerbLevel'
-type WithVerbControl eff = EffBuilder VerbLevel (->) (Bypass eff)
+-- | Wraps a 'Logger' effect to it can be bypassed based on some 'VerbLevel'
+type MbLogger = Reader VerbLevel ~> Sum (->) Logger
 
--- | Given we add a builder effect on top of the #logger effect, this appears in
--- the type of the #logger effect
+-- | Given we wrap the #logger effect to bypass it or not depending on some
+-- 'VerbLevel', this appears in its type.
 type a ~~> b =
   AnyRopeWith '[ '("console", Console)
-               , '("logger", WithVerbControl Logger)
+               , '("logger", MbLogger)
                , '("file", File) ]
               '[ArrowChoice, TryEffect IOException]
               a b
 
--- | Controls the verbosity level before logging in a 'Console' effect
+-- | Controls the verbosity level before logging in a 'Console' effect. This
+-- logic could happen at 'weave' time, but here we show that we also can
+-- implement at the 'Rope' level if it is needed, and by doing so that effects
+-- can be built out of 'Cayley' too.
 logS :: VerbLevel   -- ^ Minimal verbosity
-     -> AnyRopeWith '[ '("logger", WithVerbControl Logger) ] '[]
+     -> AnyRopeWith '[ '("logger", MbLogger) ] '[]
                     String ()
 logS minVerb = strand #logger $
-  effbuild $ -- We indicate that this strand will need to access an effect
-             -- builder ('effpure' just lifts an effect)
-    \level -> -- our builder is just a pure function, taking a verbosity level
-              -- as an input
-      if level >= minVerb  -- Depending on the verbosity level:
-      then bypassEff_ ()   -- we either bypass the Log effect (giving a const
-                           -- value),
-      else performEff Log  -- or we use it the Log effect.
+  reading $ \level -> -- our builder is just a pure function, taking a verbosity
+                      -- level as an input
+    if level >= minVerb  -- Depending on the verbosity level:
+    then L2 (const ())   -- we either bypass the Log effect
+    else R2 Log          -- or we perform it
 
 getContentsToOutput :: FilePath ~~> String
 getContentsToOutput = proc filename -> do
@@ -98,7 +92,7 @@ getContentsToOutput = proc filename -> do
           logS Info -< "I read from " ++ filename ++ ":\n" ++ str
           returnA -< str
 
--- | The Arrow program we will want to run
+-- | The Arrow program we want to run
 prog :: String ~~> ()
 prog = proc name -> do
   strand #console PutLine -< "Hello, " ++ name ++ ". What file would you like to open?"
@@ -116,15 +110,12 @@ main :: IO ()
 main = do
   vl <- getVerbLevel
   prog & loosen
-       & onEachEffFunctor -- Every EffBuilder is an instance of EffFunctor
-         (\f -> runEffBuilder f vl)
-             -- First, how to run the builder effect, which is a pure function,
-             -- by giving it the verbosity level read from CLI
-         ( weave' #logger ( runBypassWith (Kleisli . runLogger)) )
-             -- Then, how to run the effects that were wrapped in this builder
-             -- effect
-         ( weave' #console (Kleisli . runConsole)
-         . weave' #file (Kleisli . runFile) )
-             -- And finally, how to run all the other effects that were _not_
-             -- wrapped
-       & runSieveCore "You"
+       & weave' #logger (\eff -> case runReader vl eff of
+                            L2 f -> arr f
+                            R2 eff -> Kleisli $ runLogger eff)
+          -- The #logger weaver is oblivious of the bypassing logic, it just
+          -- gives the 'VerbLevel' to the effect
+       & weave' #console (Kleisli . runConsole)
+       & weave' #file (Kleisli . runFile)
+       & untwine
+       & perform "You"

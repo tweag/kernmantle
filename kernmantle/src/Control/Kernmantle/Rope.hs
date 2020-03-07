@@ -42,20 +42,19 @@ module Control.Kernmantle.Rope
     -- * Binary Effects and Strands
   , BinEff
   , Strand
+  , (:::)
   , StrandName
   , StrandEff
   , InRope
   , AllInMantle
   , strand
   , mapStrand
-  , runSieveCore
     -- * Rope Interpretation
   , weave
   , weave'
+  , WeaveAll (..)
   , retwine
   , untwine
-  , onEachEffFunctor
-  , weaveEffFunctors
     -- * Predicates
   , AnyRopeWith
   , TightRopeWith
@@ -79,6 +78,7 @@ import Data.Bifunctor.Tannen
 import Data.Function ((&))
 import Data.Profunctor hiding (rmap)
 import Data.Profunctor.Cayley (Cayley (..))
+import Data.Profunctor.EffFunctor
 import Data.Profunctor.Sieve
 import Data.Profunctor.SieveTrans
 import Data.Profunctor.Traversing
@@ -94,7 +94,6 @@ import Prelude hiding (id, (.))
 
 import Control.Kernmantle.Arrow
 import Control.Kernmantle.Error
-import Control.Kernmantle.Builder
 import Control.Kernmantle.Rope.Internal
 
 
@@ -110,7 +109,8 @@ newtype Rope (record::RopeRec) (mantle::[Strand]) (core::BinEff) a b =
            , Profunctor, Strong, Choice, Closed, Costrong, Cochoice
            , Mapping, Traversing
            , ThrowEffect ex, TryEffect ex
-           , SieveTrans f, HasAutoIdent eff
+           , SieveTrans f
+           , HasAutoIdent eff
            , Bifunctor, Biapplicative
            )
 
@@ -281,6 +281,29 @@ weave'
 weave' lbl interpFn = weave lbl (const interpFn)
 {-# INLINE weave' #-}
 
+-- | Supports 'weaveAll' over any 'Rope'
+class WeaveAll mantle core where
+  -- | Weaves all the remaining strands in the core, provided a polymorphic-enough
+  -- interpretation function can be provided.
+  --
+  -- This function is notably useful to implement the "Rope-in-Rope" pattern,
+  -- when a 'Rope' (possibly wrapped in 'Cayley') is used as the code for
+  -- another 'Rope'. 'weaveAll' in that case permits to transfer all the effects
+  -- of the outer 'Rope' to the core 'Rope'.
+  weaveAll :: (forall lbl eff. lbl -> eff :-> core)
+           -> LooseRope mantle core
+          :-> core
+
+instance WeaveAll '[] core where
+  weaveAll _ = untwine
+  {-# INLINE weaveAll #-}
+
+instance {-# OVERLAPPABLE #-} (WeaveAll mantle core)
+  => WeaveAll ((name:::eff) ': mantle) core where
+  weaveAll interpFn = weaveAll interpFn
+                    . weave' lbl (interpFn lbl)
+    where lbl = fromLabel @name
+
 -- | Reorders the strands to match some external context. @strands'@ can contain
 -- more elements than @strands@. Note it works on both 'TightRope's and
 -- 'LooseRope's
@@ -304,58 +327,3 @@ mergeStrands _ _ rope = mkRope $ \(r@(Weaver w) :& rest) ->
 untwine :: LooseRope '[] core :-> core
 untwine r = runRope r RNil
 {-# INLINE untwine #-}
-
--- * Creating and running binary effects from unary effects
-
--- | Runs a 'Rope' with no strands left when its core is a 'Sieve' (ie. is
--- mappable to a functorial/monadic effect)
-runSieveCore :: (Sieve biEff uEff)
-             => a -> LooseRope '[] biEff a b -> uEff b
-runSieveCore a r = sieve (untwine r) a
-{-# INLINE runSieveCore #-}
-
-weaveEffFunctors
-  :: (EffFunctor f, RMap (MapStrandEffs f mantle1))
-  => (f core' :-> core)
-  -> (LooseRope mantle2 core :-> core')
-  -> LooseRope (MapStrandEffs f mantle1 ++ mantle2) core
- :-> LooseRope mantle1 core'
-weaveEffFunctors f g (Rope rnr) = Rope $ unwrapSomeStrands f (g . Rope) rnr
-{-# INLINE weaveEffFunctors #-}
-
--- | Separates a 'LooseRope' in two parts: one wrapped in EffFunctors
--- (@mantle1@) and one which is not (@mantle2) and runs them. This is a
--- convenience function to run several strands wrapped with the same
--- 'EffFunctor'.
---
--- Note that the function to run the effect wrappers is executed _once per
--- wrapper_ used along the 'Rope', so keep that function light.
---
--- Note: The UX for 'onEachEffFunctor' is not great. Though it is quite simple,
--- it forces either to run everything at once, or to do some trickery by
--- returning some effect in the core. We should try to improve that.
-onEachEffFunctor
-  :: (EffFunctor f, RMap (MapStrandEffs f mantle1))
-  => (f core :-> core)  -- ^ Run the wrapper effects
-  -> (LooseRope mantle1 core :-> LooseRope rest core)
-     -- ^ Run the effects that were wrapped with the wrapper
-  -> (LooseRope mantle2 core :-> LooseRope '[] core)
-     -- ^ Run the effects that were not wrapped
-  -> LooseRope (MapStrandEffs f mantle1 ++ mantle2) core
- :-> LooseRope rest core
-onEachEffFunctor runWrapper runMantle1 runMantle2 =
-  runMantle1 . weaveEffFunctors runWrapper (untwine . runMantle2)
-{-# INLINE onEachEffFunctor #-}
-
--- groupBuilderStrands
---   :: ( RetwinableAs Rec (MapStrandEffs (EffBuilder i builderEff) runnerEffs)
---                         core flatMantle
---      , RetwinableAs Rec mantleRest core flatMantle )
---   -> Label groupedRopeName
---   -> LooseRope flatMantle core
---  :-> LooseRope ( '(groupedRopeName, EffBuilder i builderEff
---                                       (LooseRope runnerEffs core))
---                  ': mantleRest )
---                core
--- groupBuilder _ rope = mkRope $ \(Weaver weaveGroupedStrand :& rest) ->
---   runRope rope

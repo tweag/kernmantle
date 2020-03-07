@@ -96,8 +96,12 @@ instance (Strong p) => Strong (ForgetT r p) where
 --   wander f (ForgetT p) = ForgetT $ wander f p ???
 --   {-# INLINE wander #-}
 
--- | Not efficient at all for now
-wander_ :: (Traversing p, Monoid b) => (forall f. Applicative f => (a -> f b) -> s -> f t) -> p a () -> p s ()
+-- | Not efficient at all for now as it rebuilds the structure only to discard
+-- it just after
+wander_ :: (Traversing p, Monoid b)
+        => (forall f. Applicative f => (a -> f b) -> s -> f t)
+        -> p a ()
+        -> p s ()
 wander_ f eff = rmap (const ()) $ wander f (rmap (const mempty) eff)
 
 -- | The Arrow program we will want to run
@@ -115,4 +119,5 @@ main :: IO ()
 main = prog & loosen
             & weave' #console (Kleisli . runConsole)
             & weave' #file    (Kleisli . runFile)
-            & runSieveCore "You"
+            & untwine
+            & perform "You"

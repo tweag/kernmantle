@@ -20,6 +20,7 @@ import Data.Biapplicative
 import Data.Bifunctor.Tannen
 import Data.Functor.Identity
 import Data.Profunctor.Cayley
+import Data.Profunctor.EffFunctor
 import Data.Profunctor.Monad
 import Data.Profunctor.Traversing
 import Data.Profunctor.SieveTrans
@@ -31,7 +32,6 @@ import Prelude hiding (id, (.))
 
 import Control.Kernmantle.Arrow
 import Control.Kernmantle.Error
-import Control.Kernmantle.Builder
 
 
 -- | The kind for all binary effects. First param is usually an input

@@ -92,7 +92,8 @@ main = prog -- Rope ARec '[("warnConsole",Console),("console",Console),("file",F
                -- ...then set this #io strand to be directly interpreted in the
                -- core...
             -- Rope Rec '[] (Kleisli IO) String ()
-            & runSieveCore "You"
+            & untwine
+            & perform "You"
                -- ...and then we run the core with the input of prog
 
 -- | main details every strand, but we can skip the #io strand and the merging
@@ -102,4 +103,5 @@ altMain = prog & loosen
                & mergeStrands #console #warnConsole
                & weave' #console (Kleisli . runConsole)
                & weave' #file    (Kleisli . runFile)
-               & runSieveCore "You"
+               & untwine
+               & perform "You"
