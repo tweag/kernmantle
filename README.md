@@ -45,7 +45,7 @@ effect, that is, the pure function `(->)`.
 Currently, you have roughly four ways to create binary effects (more may exist,
 please feel free to ping me if I forgot some):
 
-- model them as GADTs and write interpreter functions,
+- model them as (G)ADTs and write interpreter functions,
 - compose them from regular applicative/monadic effects (`Reader`, `Writer`,
   `State` etc.),
 - reuse existing binary effects (`Categories`, `Arrows`, `Profunctors` etc.),
@@ -74,9 +74,9 @@ distributive over `m`, then `SomeBinEff f w m` will be a `Category` (and an
 Any of `f`, `w` and `m` can just be `Identity`:
 
 - If `f`, `w` and `m` are `Identity`, that's just a pure function `(->)`,
-- If only `f` is non-Identity, that's the `Tannen` bifunctor,
-- If only `w` is non-Identity, that's the `Cokleisli` category,
+- If only `f` is non-Identity, that's the `Cayley` profunctor/category,
 - If only `m` is non-Identity, that's the `Kleisli` category.
+- If only `w` is non-Identity, that's the `Cokleisli` category,
 
 Note that `f` can be composed out of several applicative functors (with
 `Compose`). And of course `m` can use any usual monadic effect composition
@@ -132,7 +132,7 @@ only requirement will be that in the end, you must be able to interpret them in
 some core binary effect. `Rope` implements both the `Arrow` typeclass stack
 (with the exception of `ArrowApply`, as we said) and the `Profunctor` stack, but
 you don't have to use either one or the other to use Kernmantle. Effects can be
-represented as pure `GADTs` and you can manipulate them without resorting to any
+represented as pure (G)ADTs and you can manipulate them without resorting to any
 other abstraction.
 
 
