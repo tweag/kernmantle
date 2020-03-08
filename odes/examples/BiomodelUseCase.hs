@@ -167,7 +167,7 @@ chemicalToODESolving chemMdl =
 -- | An effect to ask for some parameter's value
 data GetOpt a b where
   -- | Get a raw string option
-  GetOpt :: (Show b, Typeable b, ContentHashable IO b)
+  GetOpt :: (Show b, Typeable b, PureHashable b)
              -- So we can show the default value and its type, and add the
              -- selected value to the cache context
          => ReadM b  -- ^ How to parse the option
@@ -176,7 +176,7 @@ data GetOpt a b where
          -> Maybe b  -- ^ Default value
          -> GetOpt a b  -- ^ Returns final value
   -- | Ask to select between alternatives
-  Switch :: (Show b, ContentHashable IO b)
+  Switch :: (PureHashable b)
          => (String, String, b) -- ^ Name and docstring of default
          -> [(String, String, b)]
             -- ^ Names and docstrings of alternatives
@@ -354,12 +354,12 @@ interpretFileAccess ns (WriteFile name ext) = proc content -> do
 -- | Performs an action in a functor, adds this action result to
 -- the caching context, and returns the result in the underlying effect
 addingToCachingContext
-  :: (ContentHashable IO b, Show b, Functor f, Arrow eff)
+  :: (PureHashable b, Functor f, Arrow eff)
   => f b  -- ^ Action to get the value to add
   -> (f ~> Writer CachingContext ~> eff) a b
 addingToCachingContext getValue =
   fmapping getValue $ \finalValue ->
-    writing [SomeHashable finalValue] $
+    writing [SomePureHashable finalValue] $
       returning finalValue
 
 -- | Given a Namespace to generate CLI flag names, turns a GetOpt into an actual

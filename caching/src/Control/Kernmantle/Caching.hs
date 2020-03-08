@@ -5,10 +5,13 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE ConstraintKinds #-}
 
 module Control.Kernmantle.Caching
   ( CS.ContentStore
-  , CS.ContentHashable (..)
+  , CS.ContentHashable
+  , PureHashable
+  , IOHashable
   , ProvidesCaching (..)
   , ProvidesPosCaching (..)
   , AutoIdent (..)
@@ -31,7 +34,7 @@ import Control.Monad.Trans.Control
 import qualified Data.CAS.ContentHashable as CS
 import qualified Data.CAS.ContentStore as CS
 import qualified Data.CAS.RemoteCache as Remote
-import Data.Functor.Identity (Identity)
+import Data.Functor.Identity (Identity (..))
 import Data.Store (Store)
 
 import Prelude hiding (id, (.))
@@ -40,16 +43,19 @@ import Prelude hiding (id, (.))
 instance (Monad m) => CS.ContentHashable m SplitId
 instance (Monad m) => CS.ContentHashable m ArrowIdent
 
+-- | A value directly hashable
+type PureHashable = CS.ContentHashable Identity
+-- | A value hashable via some IO action
+type IOHashable = CS.ContentHashable IO
 
 data SomeHashable where
-  SomeHashable ::
-    (CS.ContentHashable IO a, Show a) => a -> SomeHashable
+  SomePureHashable :: (PureHashable a) => a -> SomeHashable
+  SomeIOHashable   :: (IOHashable a)   => a -> SomeHashable
 instance CS.ContentHashable IO SomeHashable where
-  contentHashUpdate ctx (SomeHashable a) = CS.contentHashUpdate ctx a
+  contentHashUpdate ctx (SomePureHashable a) =
+    return $ runIdentity $ CS.contentHashUpdate ctx a
+  contentHashUpdate ctx (SomeIOHashable a) = CS.contentHashUpdate ctx a
 type CachingContext = [SomeHashable]
-instance Show SomeHashable where
-  show (SomeHashable a) = show a
-
 
 -- | A class to cache part of the pipeline
 class ProvidesCaching eff where
