@@ -170,7 +170,7 @@ interpretFileAccess (WriteFile name) = Cayley $ f <$> fpParser name "write-"
   where f realPath = liftKleisliIO $ BS.writeFile realPath
 
 interpretCached store runRope (CachedOp cacher f) =
-  mapKleisli (CS.cacheKleisliIO (Just 1) cacher Remote.NoCache store) $
+  mapKleisli (CS.cacheKleisliIO (Just 1) cacher store Remote.NoCache) $
     runRope $ loosen f
 
 --------------------------------------------------------------------------------

@@ -52,14 +52,14 @@ instance Show SomeHashable where
 -- | A class to cache part of the pipeline
 class ProvidesCaching eff where
   usingStore :: (CS.ContentHashable Identity a, Store b)
-            => eff a b
-            -> eff a b
+             => eff a b
+             -> eff a b
 -- | A class to cache part of the pipeline where the hash can depend on the
 -- position of the task in the pipeline
 class (ProvidesCaching eff) => ProvidesPosCaching eff where
   usingStore' :: (CS.ContentHashable Identity a, Store b)
-             => eff a b
-             -> eff a b
+              => eff a b
+              -> eff a b
 
 instance {-# OVERLAPPABLE #-} (Functor f, ProvidesCaching eff)
   => ProvidesCaching (f ~> eff) where
@@ -78,7 +78,7 @@ instance (MonadIO m, MonadBaseControl IO m, MonadMask m)
     mapReader_ $ \(StoreWithId store pipelineId) ->
     mapKleisli $ \act input ->
       CS.cacheKleisliIO
-       pipelineId (CS.defaultCacherWithIdent 1) Remote.NoCache store
+       pipelineId (CS.defaultCacherWithIdent 1) store Remote.NoCache
        act input
 
 instance (Arrow eff, ProvidesCaching eff)

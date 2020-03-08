@@ -97,7 +97,7 @@ type CoreEff = Parser ~> Kleisli (ReaderT CS.ContentStore IO)
 instance WithCaching CoreEff where
   cache c = mapKleisli (\act i -> do
                            store <- ask
-                           CS.cacheKleisliIO (Just 1) c Remote.NoCache store act i)
+                           CS.cacheKleisliIO (Just 1) c store Remote.NoCache act i)
 
 -- | Turns a GetOpt into an actual optparse-applicative Parser
 interpretGetOpt :: GetOpt a b -> CoreEff a b
