@@ -36,15 +36,14 @@ executables:
       - kernmantle
       - kernmantle-caching
       - optparse-applicative
-      - containers
-      - bytestring
-      - profunctors
-  exCaching2:
-    main: examples/ExCaching2.hs
-    dependencies:
-      - kernmantle
-      - kernmantle-caching
-      - optparse-applicative
       - transformers
       - profunctors
       - bytestring
+  exCachingAlt:
+    main: examples/ExCachingAlt.hs
+    dependencies:
+      - kernmantle
+      - optparse-applicative
+      - containers
+      - bytestring
+      - profunctors

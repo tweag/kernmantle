@@ -35,14 +35,14 @@ import Data.Store (Store)
 import Prelude hiding (id, (.))
 
 
-instance CS.ContentHashable Identity SplitId
-instance CS.ContentHashable Identity ArrowIdent
+instance (Monad m) => CS.ContentHashable m SplitId
+instance (Monad m) => CS.ContentHashable m ArrowIdent
 
 
 data SomeHashable where
   SomeHashable ::
-    (CS.ContentHashable Identity a, Show a) => a -> SomeHashable
-instance CS.ContentHashable Identity SomeHashable where
+    (CS.ContentHashable IO a, Show a) => a -> SomeHashable
+instance CS.ContentHashable IO SomeHashable where
   contentHashUpdate ctx (SomeHashable a) = CS.contentHashUpdate ctx a
 type CachingContext = [SomeHashable]
 instance Show SomeHashable where
@@ -51,13 +51,13 @@ instance Show SomeHashable where
 
 -- | A class to cache part of the pipeline
 class ProvidesCaching eff where
-  usingStore :: (CS.ContentHashable Identity a, Store b)
+  usingStore :: (CS.ContentHashable IO a, Store b)
              => eff a b
              -> eff a b
 -- | A class to cache part of the pipeline where the hash can depend on the
 -- position of the task in the pipeline
 class (ProvidesCaching eff) => ProvidesPosCaching eff where
-  usingStore' :: (CS.ContentHashable Identity a, Store b)
+  usingStore' :: (CS.ContentHashable IO a, Store b)
               => eff a b
               -> eff a b
 
@@ -78,7 +78,7 @@ instance (MonadIO m, MonadBaseControl IO m, MonadMask m)
     mapReader_ $ \(StoreWithId store pipelineId) ->
     mapKleisli $ \act input ->
       CS.cacheKleisliIO
-       pipelineId (CS.defaultCacherWithIdent 1) store Remote.NoCache
+       pipelineId (CS.defaultIOCacherWithIdent 1) store Remote.NoCache
        act input
 
 instance (Arrow eff, ProvidesCaching eff)
@@ -105,14 +105,14 @@ instance (ProvidesPosCaching core) => ProvidesPosCaching (Rope r m core) where
 
 -- | Any rope whose core provides caching can run cached tasks. The task is
 -- identified by its position in the pipeline
-caching' :: (ProvidesPosCaching core, CS.ContentHashable Identity a, Show a, Store b)
+caching' :: (ProvidesPosCaching core, CS.ContentHashable IO a, Show a, Store b)
          => Rope r mantle core a b -> Rope r mantle core a b
 caching' = mapRopeCore usingStore'
 
 -- | Any rope whose core provides caching can run cached tasks. The task is
 -- identified by an explicit identifier
 caching :: (Arrow core, ProvidesCaching core
-           ,CS.ContentHashable Identity ident, CS.ContentHashable Identity a
+           ,CS.ContentHashable IO ident, CS.ContentHashable IO a
            ,Store b)
         => ident -> Rope r mantle core a b -> Rope r mantle core a b
 caching n r = arr (,n) >>> mapRopeCore usingStore (r . arr fst)

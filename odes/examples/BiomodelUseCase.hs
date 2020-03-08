@@ -42,7 +42,6 @@ import Control.Kernmantle.Caching
 import Control.Kernmantle.Rope
 import Control.Monad.IO.Class
 import Data.Csv.HMatrix
-import Data.Functor.Identity (Identity)
 import Data.Functor.Compose
 import Data.List (intercalate)
 import Data.Maybe (fromJust)
@@ -168,7 +167,7 @@ chemicalToODESolving chemMdl =
 -- | An effect to ask for some parameter's value
 data GetOpt a b where
   -- | Get a raw string option
-  GetOpt :: (Show b, Typeable b, ContentHashable Identity b)
+  GetOpt :: (Show b, Typeable b, ContentHashable IO b)
              -- So we can show the default value and its type, and add the
              -- selected value to the cache context
          => ReadM b  -- ^ How to parse the option
@@ -177,7 +176,7 @@ data GetOpt a b where
          -> Maybe b  -- ^ Default value
          -> GetOpt a b  -- ^ Returns final value
   -- | Ask to select between alternatives
-  Switch :: (Show b, ContentHashable Identity b)
+  Switch :: (Show b, ContentHashable IO b)
          => (String, String, b) -- ^ Name and docstring of default
          -> [(String, String, b)]
             -- ^ Names and docstrings of alternatives
@@ -355,7 +354,7 @@ interpretFileAccess ns (WriteFile name ext) = proc content -> do
 -- | Performs an action in a functor, adds this action result to
 -- the caching context, and returns the result in the underlying effect
 addingToCachingContext
-  :: (ContentHashable Identity b, Show b, Functor f, Arrow eff)
+  :: (ContentHashable IO b, Show b, Functor f, Arrow eff)
   => f b  -- ^ Action to get the value to add
   -> (f ~> Writer CachingContext ~> eff) a b
 addingToCachingContext getValue =
