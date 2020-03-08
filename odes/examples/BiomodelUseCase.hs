@@ -456,6 +456,9 @@ pipeline =
 -- This type is completely equivalent to:
 -- CoreEff a b =
 --   Namespace -> Parser (CachingContext, ContentStore -> ArrowIdent -> a -> IO b)
+--
+-- This type is purely for documentation, you can notice that all our
+-- interpretation functions are polymorphic enough not to be tied to that type
 type CoreEff =
      Reader Namespace -- Get the namespace we are in
   ~> Parser -- Accumulate all the wanted options and get them from CLI. The CLI
@@ -463,7 +466,7 @@ type CoreEff =
   ~> Writer CachingContext -- Accumulate the context needed to know what to take
                            -- into account to perform caching
   ~> AutoIdent   -- Get an identifier for the task
-     (   Reader ContentStore -- Get the content store, to cache computation at
+     (   Reader LocalStoreWithId -- Get the content store, to cache computation at
                             -- runtime
       ~> Kleisli IO) -- This is the runtime layer, the one the pipeline executes in
 
@@ -501,6 +504,6 @@ main = do
     -- Once we have the store, we can execute the rest of the core layers:
     storeLayer & runWriter_   -- Remove the CachingContext layer
                & runAutoIdent -- Remove the AutoIdent layer
-               & runReader (StoreWithId store $ Just 1) -- Remove the ContentStore layer
+               & runReader (localStoreWithId store $ Just 1) -- Remove the ContentStore layer
                & perform () -- Finally, run the IO
   return ()

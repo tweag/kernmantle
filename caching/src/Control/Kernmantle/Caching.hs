@@ -14,9 +14,11 @@ module Control.Kernmantle.Caching
   , AutoIdent (..)
   , SomeHashable (..)
   , StoreWithId (..)
+  , LocalStoreWithId
   , CachingContext
   , CS.withStore
   , caching, caching'
+  , localStoreWithId
   ) where
 
 import Control.Category
@@ -68,17 +70,23 @@ instance {-# OVERLAPPABLE #-} (Functor f, ProvidesPosCaching eff)
   => ProvidesPosCaching (f ~> eff) where
   usingStore' (Cayley f) = Cayley $ fmap usingStore' f
 
--- | Bundles together a identifier for the whole pipeline. If identifier is
--- Nothing, no caching will be performed.
-data StoreWithId = StoreWithId CS.ContentStore (Maybe Int)
+-- | Bundles together a store with an identifier for the whole pipeline. If
+-- identifier is Nothing, no caching will be performed.
+data StoreWithId remoteCacher = StoreWithId CS.ContentStore remoteCacher (Maybe Int)
 
-instance (MonadIO m, MonadBaseControl IO m, MonadMask m)
-  => ProvidesCaching (Reader StoreWithId ~> Kleisli m) where
+type LocalStoreWithId = StoreWithId Remote.NoCache
+
+-- | A 'StoreWithId' with no remote caching
+localStoreWithId :: CS.ContentStore -> Maybe Int -> LocalStoreWithId
+localStoreWithId store ident = StoreWithId store Remote.NoCache ident
+
+instance (MonadIO m, MonadBaseControl IO m, MonadMask m, Remote.Cacher m remoteCacher)
+  => ProvidesCaching (Reader (StoreWithId remoteCacher) ~> Kleisli m) where
   usingStore =
-    mapReader_ $ \(StoreWithId store pipelineId) ->
+    mapReader_ $ \(StoreWithId store remoteCacher pipelineId) ->
     mapKleisli $ \act input ->
       CS.cacheKleisliIO
-       pipelineId (CS.defaultIOCacherWithIdent 1) store Remote.NoCache
+       pipelineId (CS.defaultIOCacherWithIdent 1) store remoteCacher
        act input
 
 instance (Arrow eff, ProvidesCaching eff)
@@ -87,7 +95,8 @@ instance (Arrow eff, ProvidesCaching eff)
     mapWriter_ $ \newContext eff ->
       arr (,newContext) >>> usingStore (eff . arr fst)
       -- New context is just added as phantom input to the underlying effect
-instance (Arrow eff, ProvidesPosCaching eff) => ProvidesPosCaching (Writer CachingContext ~> eff) where
+instance (Arrow eff, ProvidesPosCaching eff)
+  => ProvidesPosCaching (Writer CachingContext ~> eff) where
   usingStore' =
     mapWriter_ $ \newContext eff ->
       arr (,newContext) >>> usingStore' (eff . arr fst)

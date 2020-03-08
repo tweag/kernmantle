@@ -82,7 +82,7 @@ pipeline = proc () -> do
     
 -- | The core effect we need to collect all our options and build the
 -- corresponding CLI Parser, and hold the store for caching.
-type CoreEff = Parser ~> Reader StoreWithId ~> Kleisli IO
+type CoreEff = Parser ~> Reader LocalStoreWithId ~> Kleisli IO
 
 -- | Turns a GetOpt into an actual optparse-applicative Parser
 interpretGetOpt :: GetOpt a b -> CoreEff a b
@@ -123,5 +123,5 @@ main = do
          header "A kernmantle pipeline with caching"
       <> progDesc "Does the same than exCaching, but caching is done with a class"
     CS.withStore [absdir|/tmp/_store|] $ \store ->
-       pipelineReader & runReader (StoreWithId store $ Just 1)
+       pipelineReader & runReader (localStoreWithId store $ Just 1)
                       & perform ()
