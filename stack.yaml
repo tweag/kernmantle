@@ -42,20 +42,12 @@ extra-deps:
 - profunctors-5.5.2  # Needed for having whole set of Cayley instances
 - hmatrix-csv-0.1.0.2
 - hvega-0.5.0.0
+- cas-hashable-1.0.1
+- cas-store-1.0.1
 - git: https://github.com/haskell-numerics/hmatrix-sundials
   commit: 9b6ec2b5fc509f74c5e61657dfc638a2c7ebced0 # Needs sundials 4.1.0
 - git: https://github.com/ekmett/bifunctors.git
   commit: acd1866f8ddad7991ae31d5c66740fc697fef92b
-- git: https://github.com/tweag/funflow.git
-  commit: d2b4701c79e8bf8ae1c27778ed242079d83a5efd # branch split-cas-code
-  subdirs:
-    - cas-hashable
-    - cas-store
-
-# - acme-missiles-0.3
-# - git: https://github.com/commercialhaskell/stack.git
-#   commit: e7b331f14bcffb8367cd58fbfc8b40ec7642100a
-#
 # extra-deps: []
 
 # Override default flag values for local packages and extra-deps
