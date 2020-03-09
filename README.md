@@ -22,9 +22,7 @@ More detailed information about the interest of this paradigm in the context of 
 
 ## To build
 
-Recommended way is to use stack.
-Nix config might not be up to date.
-
+You can either directly use `stack`, or start a `nix-shell` and use cabal.
 
 ## Why yet another effects library??
 
