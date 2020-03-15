@@ -86,7 +86,8 @@ split :: (s -> SplitId) -> (s -> SplitId -> s) -- Morally a lens, but we don't
                                                -- depend on lens
       -> (s -> a) -> (a -> b -> c) -> (s -> b) -> s -> c
 split get set f c g s = case get s of
-  SplitId r -> let a = numerator r; b = denominator r
+  SplitId r -> let a = numerator r
+                   b = denominator r
                in f (set s $ SplitId $ a % (a+b)) `c` g (set s $ SplitId $ (a+b) % b)
 {-# INLINE split #-}
 
@@ -108,8 +109,10 @@ instance Show ArrowIdent where
 -- its position in a pipeline. It is isomorphic to a @Reader ArrowIdent ~> arr@, but
 -- we need a different Arrow instance than what 'Cayley' provides.
 newtype AutoIdent arr a b = AutoIdent (ArrowIdent -> arr a b)
-  deriving (Profunctor, Strong, Choice)
-    via WrappedArrow (AutoIdent arr)
+  deriving ( Profunctor, Strong, Costrong, Choice, Cochoice, Closed
+           , Traversing, Mapping
+           , ArrowZero, ArrowLoop )
+    via Cayley ((->) ArrowIdent) arr
 
 runAutoIdent' :: SplitId -> AutoIdent arr a b -> arr a b
 runAutoIdent' i (AutoIdent f) = f $ ArrowIdent i i i i
@@ -129,8 +132,6 @@ instance (Arrow eff) => Arrow (AutoIdent eff) where
     a (***) b
   AutoIdent a &&& AutoIdent b = AutoIdent $ split aidPar (\ai i -> ai{aidPar=i})
     a (&&&) b
-instance (ArrowZero eff) => ArrowZero (AutoIdent eff) where
-  zeroArrow = AutoIdent $ const zeroArrow
 instance (ArrowPlus eff) => ArrowPlus (AutoIdent eff) where
   AutoIdent a <+> AutoIdent b = AutoIdent $ split aidPlus (\ai i -> ai{aidPlus=i})
     a (<+>) b
@@ -141,10 +142,6 @@ instance (ArrowChoice eff) => ArrowChoice (AutoIdent eff) where
     a (|||) b
   AutoIdent a +++ AutoIdent b = AutoIdent $ split aidChoice (\ai i -> ai{aidChoice=i})
     a (+++) b
-
-instance (Traversing eff, ArrowChoice eff) => Traversing (AutoIdent eff) where
-  traverse' (AutoIdent a) = AutoIdent $ traverse' . a
-  wander f (AutoIdent a) = AutoIdent $ wander f . a
 
 instance (SieveTrans f eff) => SieveTrans f (AutoIdent eff) where
   liftSieve = AutoIdent . const . liftSieve
@@ -160,3 +157,10 @@ instance HasAutoIdent eff (AutoIdent eff) where
 instance (HasAutoIdent ai eff, Applicative f)
   => HasAutoIdent ai (Cayley f eff) where
   liftAutoIdent f = Cayley $ pure (liftAutoIdent f)
+
+--  -- | Permits an arrow to recursively call itself without changing its identifier
+-- fixIdent :: (HasAutoIdent ai eff)
+--          => (eff a b -> eff a b) -> eff a b
+-- fixIdent f = liftAutoIdent $ \aid ->
+--   let run = case f (AutoIdent $ \_ -> run) of AutoIdent f' -> f' aid
+--   in run
