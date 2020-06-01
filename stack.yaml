@@ -42,7 +42,7 @@ extra-deps:
 - hmatrix-csv-0.1.0.2
 - hvega-0.5.0.0
 - cas-hashable-1.0.1
-- cas-store-1.0.1
+- cas-store-1.1.0
 - sqlite-simple-0.4.18.0
 - store-0.7.4
 - vinyl-0.12.2

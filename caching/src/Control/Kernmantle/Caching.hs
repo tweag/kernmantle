@@ -30,7 +30,7 @@ import Control.Kernmantle.Arrow
 import Control.Kernmantle.Rope
 import Control.Monad.Catch
 import Control.Monad.IO.Class
-import Control.Monad.Trans.Control
+import Control.Monad.IO.Unlift
 import qualified Data.CAS.ContentHashable as CS
 import qualified Data.CAS.ContentStore as CS
 import qualified Data.CAS.RemoteCache as Remote
@@ -86,7 +86,7 @@ type LocalStoreWithId = StoreWithId Remote.NoCache
 localStoreWithId :: CS.ContentStore -> Maybe Int -> LocalStoreWithId
 localStoreWithId store ident = StoreWithId store Remote.NoCache ident
 
-instance (MonadIO m, MonadBaseControl IO m, MonadMask m, Remote.Cacher m remoteCacher)
+instance (MonadIO m, MonadUnliftIO m, MonadMask m, Remote.Cacher m remoteCacher)
   => ProvidesCaching (Reader (StoreWithId remoteCacher) ~> Kleisli m) where
   usingStore =
     mapReader_ $ \(StoreWithId store remoteCacher pipelineId) ->

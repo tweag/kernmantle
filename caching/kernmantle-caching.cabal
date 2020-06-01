@@ -1,0 +1,84 @@
+cabal-version: 1.12
+
+-- This file has been generated from package.yaml by hpack version 0.33.0.
+--
+-- see: https://github.com/sol/hpack
+--
+-- hash: 4c9ca63e1ec6c06ad7658e94f859a38fd4c3b74c2ac2a2a74d7a1d48e6215086
+
+name:           kernmantle-caching
+version:        0.1.0.0
+synopsis:       Cache parts of a Kernmantle pipeline via cas-store
+description:    Please see the README on GitHub at <https://github.com/YPares/kernmantle#readme>
+category:       Control
+homepage:       https://github.com/YPares/kernmantle#readme
+bug-reports:    https://github.com/YPares/kernmantle/issues
+author:         Yves Parès
+maintainer:     yves.pares@gmail.com
+copyright:      2019 Yves Parès
+license:        BSD3
+build-type:     Simple
+
+source-repository head
+  type: git
+  location: https://github.com/YPares/kernmantle
+
+library
+  exposed-modules:
+      Control.Kernmantle.Caching
+  other-modules:
+      Paths_kernmantle_caching
+  hs-source-dirs:
+      src
+  build-depends:
+      base >=4.7 && <5
+    , cas-hashable
+    , cas-store >=1.1.0
+    , exceptions
+    , kernmantle
+    , path
+    , path-io
+    , store
+    , unliftio-core
+  default-language: Haskell2010
+
+executable exCaching
+  main-is: examples/ExCaching.hs
+  other-modules:
+      Paths_kernmantle_caching
+  build-depends:
+      base >=4.7 && <5
+    , bytestring
+    , cas-hashable
+    , cas-store >=1.1.0
+    , exceptions
+    , kernmantle
+    , kernmantle-caching
+    , optparse-applicative
+    , path
+    , path-io
+    , profunctors
+    , store
+    , transformers
+    , unliftio-core
+  default-language: Haskell2010
+
+executable exCachingAlt
+  main-is: examples/ExCachingAlt.hs
+  other-modules:
+      Paths_kernmantle_caching
+  build-depends:
+      base >=4.7 && <5
+    , bytestring
+    , cas-hashable
+    , cas-store >=1.1.0
+    , containers
+    , exceptions
+    , kernmantle
+    , optparse-applicative
+    , path
+    , path-io
+    , profunctors
+    , store
+    , unliftio-core
+  default-language: Haskell2010

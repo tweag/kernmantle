@@ -22,9 +22,9 @@ dependencies:
 - path-io
 - store
 - cas-hashable
-- cas-store
-- monad-control
+- cas-store >= 1.1.0
 - exceptions
+- unliftio-core
 
 library:
   source-dirs: src

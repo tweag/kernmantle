@@ -1,0 +1,68 @@
+cabal-version: 1.12
+
+-- This file has been generated from package.yaml by hpack version 0.33.0.
+--
+-- see: https://github.com/sol/hpack
+--
+-- hash: 362f1de9ad38bf5c3ee00663e0044795b8c401c582423d7ea953aed5f1a32bdf
+
+name:           kernmantle-odes
+version:        0.1.0.0
+synopsis:       Kernmantle effect to solve Ordinary Differential Equation systems
+description:    Please see the README on GitHub at <https://github.com/YPares/kernmantle#readme>
+category:       Control
+homepage:       https://github.com/YPares/kernmantle#readme
+bug-reports:    https://github.com/YPares/kernmantle/issues
+author:         Yves Parès
+maintainer:     yves.pares@gmail.com
+copyright:      2019 Yves Parès
+license:        BSD3
+build-type:     Simple
+
+source-repository head
+  type: git
+  location: https://github.com/YPares/kernmantle
+
+library
+  other-modules:
+      Paths_kernmantle_odes
+  hs-source-dirs:
+      src
+  build-depends:
+      base >=4.7 && <5
+    , hmatrix
+    , hmatrix-csv
+    , hmatrix-sundials
+    , kernmantle
+  default-language: Haskell2010
+
+executable biomodel
+  main-is: examples/BiomodelUseCase.hs
+  other-modules:
+      Paths_kernmantle_odes
+  build-depends:
+      base >=4.7 && <5
+    , bytestring
+    , cas-hashable
+    , cas-store
+    , containers
+    , deepseq
+    , directory
+    , filepath
+    , hmatrix
+    , hmatrix-csv
+    , hmatrix-sundials
+    , hvega
+    , kernmantle
+    , kernmantle-caching
+    , kernmantle-odes
+    , lens
+    , optparse-applicative
+    , path
+    , path-io
+    , profunctors
+    , store
+    , text
+    , unordered-containers
+    , vector
+  default-language: Haskell2010

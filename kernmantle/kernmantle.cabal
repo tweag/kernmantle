@@ -1,0 +1,108 @@
+cabal-version: 1.12
+
+-- This file has been generated from package.yaml by hpack version 0.33.0.
+--
+-- see: https://github.com/sol/hpack
+--
+-- hash: d1c11eb8ed7a64f130402199c56ee67fc4f5ca738808a5c3870b54c150f01bbf
+
+name:           kernmantle
+version:        0.1.0.0
+synopsis:       Composing Applicatives, Monads, Comonads and Arrows into Arrows
+description:    Please see the README on GitHub at <https://github.com/YPares/kernmantle#readme>
+category:       Control
+homepage:       https://github.com/YPares/kernmantle#readme
+bug-reports:    https://github.com/YPares/kernmantle/issues
+author:         Yves Parès
+maintainer:     yves.pares@gmail.com
+copyright:      2019 Yves Parès
+license:        BSD3
+license-file:   LICENSE
+build-type:     Simple
+
+source-repository head
+  type: git
+  location: https://github.com/YPares/kernmantle
+
+library
+  exposed-modules:
+      Control.Kernmantle.Arrow
+      Control.Kernmantle.Error
+      Control.Kernmantle.Rope
+      Control.Kernmantle.Rope.Internal
+      Data.Profunctor.EffFunctor
+      Data.Profunctor.Trans
+  other-modules:
+      Paths_kernmantle
+  hs-source-dirs:
+      src
+  build-depends:
+      base >=4.7 && <5
+    , bifunctors
+    , profunctors >=5.5.2
+    , safe-exceptions
+    , transformers
+    , vinyl >=0.11
+  default-language: Haskell2010
+
+executable ex1
+  main-is: examples/Ex1.hs
+  other-modules:
+      Paths_kernmantle
+  build-depends:
+      base >=4.7 && <5
+    , bifunctors
+    , kernmantle
+    , profunctors >=5.5.2
+    , safe-exceptions
+    , transformers
+    , vinyl >=0.11
+  default-language: Haskell2010
+
+executable exBypass
+  main-is: examples/ExBypass.hs
+  other-modules:
+      Paths_kernmantle
+  build-depends:
+      base >=4.7 && <5
+    , bifunctors
+    , kernmantle
+    , profunctors >=5.5.2
+    , safe-exceptions
+    , transformers
+    , vinyl >=0.11
+  default-language: Haskell2010
+
+executable exCli
+  main-is: examples/ExCli.hs
+  other-modules:
+      Paths_kernmantle
+  build-depends:
+      base >=4.7 && <5
+    , bifunctors
+    , bytestring
+    , kernmantle
+    , optparse-applicative
+    , profunctors
+    , safe-exceptions
+    , transformers
+    , vinyl >=0.11
+  default-language: Haskell2010
+
+executable exLenses
+  main-is: examples/ExLenses.hs
+  other-modules:
+      Paths_kernmantle
+  build-depends:
+      aeson
+    , base >=4.7 && <5
+    , bifunctors
+    , kernmantle
+    , lens
+    , lens-aeson
+    , profunctors
+    , safe-exceptions
+    , transformers
+    , unordered-containers
+    , vinyl >=0.11
+  default-language: Haskell2010
