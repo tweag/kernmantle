@@ -40,7 +40,7 @@ import Options.Applicative
 import Data.Char (toUpper)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
-import Path (absdir)
+import Path
 
 --------------------------------------------------------------------------------
 -- Effect definition
