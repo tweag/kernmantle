@@ -18,7 +18,7 @@ function.
 
 Each effect can represent some task in a pipeline. The way each task will be executed completely depends on the final interpretation functions given to `entwine`. That makes each task of the pipeline fully configurable, and each task or pipeline of tasks very easy to share and reuse. This also (as does any arrow pipeline) gives you the capacity to analyse the pipeline ahead-of-time, before it even runs.
 
-More detailed information about the interest of this paradigm in the context of data science can be found in the [porcupine package documentation](https://tweag.github.io/porcupine/), which uses this paradigm.
+More detailed information about the interest of this paradigm in the context of data science can be found in the [ICFP Haskell Symposium 2020 paper](https://drive.google.com/file/d/1TE1NqefM0EUA4FtfjzQlxzOFgsIBb_uF/view?usp=sharing) we published about Kernmantle, and also in the [porcupine package documentation](https://tweag.github.io/porcupine/), which uses this paradigm.
 
 ## To build
 
