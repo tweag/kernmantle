@@ -17,7 +17,7 @@
 #
 # resolver: ./custom-snapshot.yaml
 # resolver: https://example.com/snapshots/2018-01-01.yaml
-resolver: lts-15.14
+resolver: lts-16.11
 
 # User packages to be built.
 # Various formats can be used as shown in the example below.
@@ -33,7 +33,8 @@ packages:
 - batteries
 - caching
 - streams
-- odes
+# - odes  # Uncomment along with the hmatrix-sundials below to build this example
+          # You will need to install the C lib sundials-4.1.0 for it to build
 
 extra-deps:
 - hmatrix-csv-0.1.0.2
@@ -46,8 +47,8 @@ extra-deps:
 - direct-sqlite-2.3.26
 - store-core-0.4.4.2
 - th-utilities-0.2.4.0
-- git: https://github.com/haskell-numerics/hmatrix-sundials
-  commit: 8333309c82b737247d3c14e66ae245febb1a6ab0 # Needs sundials 4.1.0
+# - git: https://github.com/haskell-numerics/hmatrix-sundials
+#   commit: 8333309c82b737247d3c14e66ae245febb1a6ab0 # Needs sundials 4.1.0
 # Override default flag values for local packages and extra-deps
 # flags: {}
 
