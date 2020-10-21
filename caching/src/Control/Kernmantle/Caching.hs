@@ -6,6 +6,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 module Control.Kernmantle.Caching
   ( CS.ContentStore
@@ -86,8 +87,8 @@ type LocalStoreWithId = StoreWithId Remote.NoCache
 localStoreWithId :: CS.ContentStore -> Maybe Int -> LocalStoreWithId
 localStoreWithId store ident = StoreWithId store Remote.NoCache ident
 
-instance (MonadIO m, MonadUnliftIO m, MonadMask m, Remote.Cacher m remoteCacher)
-  => ProvidesCaching (Reader (StoreWithId remoteCacher) ~> Kleisli m) where
+instance (MonadIO m, MonadUnliftIO m, MonadMask m, Remote.Cacher m remoteCacher, HasKleisli m eff)
+  => ProvidesCaching (Reader (StoreWithId remoteCacher) ~> eff) where
   usingStore =
     mapReader_ $ \(StoreWithId store remoteCacher pipelineId) ->
     mapKleisli $ \act input ->
