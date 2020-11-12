@@ -50,6 +50,7 @@ module Control.Kernmantle.Rope
   , strand
   , mapStrand
     -- * Rope Interpretation
+  , WeaverFor
   , weave, weave', weaveK
   , WeaveAll (..)
   , retwine
@@ -203,6 +204,16 @@ loosen :: (NatToInt (RLength m))
        => TightRope m core :-> LooseRope m core
 loosen r = mkRope $ runRope r . toARec
 {-# INLINE loosen #-}
+
+
+-- | A type alias to clarify the type of functions that will weave the binary effects
+type WeaverFor name binEff strands coreConstraints =
+  forall mantle core i o.
+  (Entwines (LooseRope mantle core) strands, SatisfiesAll core coreConstraints) =>
+  (forall x y. (LooseRope ('(name, binEff) ': mantle) core x y -> core x y)) ->
+  binEff i o ->
+  core i o
+
 
 -- | Adds a new effect strand in the 'Rope' by decribing how to interpret that
 -- in the core. The interpretation function is fed the fixpoint of all
