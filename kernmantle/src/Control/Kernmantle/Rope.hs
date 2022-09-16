@@ -199,7 +199,7 @@ tighten r = mkRope $ runRope r . fromARec
 
 -- | Turn a 'TightRope' into a 'LooseRope'. This is very often the first step
 -- in a chain of 'weave's.
-loosen :: (NatToInt (RLength m))
+loosen :: (NatToInt (RLength m), ToARec m)
        => TightRope m core :-> LooseRope m core
 loosen r = mkRope $ runRope r . toARec
 {-# INLINE loosen #-}
