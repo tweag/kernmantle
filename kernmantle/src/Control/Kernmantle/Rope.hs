@@ -97,7 +97,7 @@ import Control.Kernmantle.Rope.Internal
 
 
 -- | 'Rope' is a free arrow built out of _several_ binary effects (ie. effects
--- with kind * -> * -> *). These effects are called 'Strand's, they compose the
+-- with kind Type -> Type -> Type). These effects are called 'Strand's, they compose the
 -- @mantle@, can be interpreted in an @interp@ effect and can be interlaced "on
 -- top" of an existing @core@ effect.
 newtype Rope (record::RopeRec) (mantle::[Strand]) (core::BinEff) a b =
