@@ -19,6 +19,7 @@ import Data.Bifunctor
 import Data.Biapplicative
 import Data.Bifunctor.Tannen
 import Data.Functor.Identity
+import Data.Kind
 import Data.Profunctor.Cayley
 import Data.Profunctor.EffFunctor
 import Data.Profunctor.Monad
@@ -36,10 +37,10 @@ import Control.Kernmantle.Error
 
 -- | The kind for all binary effects. First param is usually an input
 -- (contravariant) of the effect and second one an output (covariant).
-type BinEff = * -> * -> *
+type BinEff = Type -> Type -> Type
 
 -- | The kind for unary effects
-type UnaryEff = * -> *
+type UnaryEff = Type -> Type
 
 -- | The kind for a named binary effect. Must remain a tuple because that's what
 -- vinyl expects.
@@ -53,9 +54,9 @@ type family StrandEff t where
 
 -- | The kind for records that will contain 'Weaver's. First type param will
 -- most often be @Weaver someCore@
-type RopeRec = (Strand -> *) -> [Strand] -> *
+type RopeRec = (Strand -> Type) -> [Strand] -> Type
 
--- | Runs one @strand@ (* -> * -> * effect) in a @interp@ effect. Is
+-- | Runs one @strand@ (Type -> Type -> Type effect) in a @interp@ effect. Is
 -- parameterized over a Strand (and not just a BinEffect) even if it ignores its
 -- name internally because that's what is expect by the 'RopeRec'
 newtype Weaver (interp::BinEff) (strand::Strand) = Weaver
