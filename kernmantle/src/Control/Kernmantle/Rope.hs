@@ -110,7 +110,7 @@ newtype Rope (record::RopeRec) (mantle::[Strand]) (core::BinEff) a b =
            , ThrowEffect ex, TryEffect ex
            , SieveTrans f
            , HasAutoIdent eff
-           , Bifunctor, Biapplicative
+           , Functor, Bifunctor, Biapplicative
            )
 
 runRope :: Rope record mantle core a b -> record (Weaver core) mantle -> core a b
@@ -199,7 +199,7 @@ tighten r = mkRope $ runRope r . fromARec
 
 -- | Turn a 'TightRope' into a 'LooseRope'. This is very often the first step
 -- in a chain of 'weave's.
-loosen :: (NatToInt (RLength m))
+loosen :: (ToARec m, NatToInt (RLength m))
        => TightRope m core :-> LooseRope m core
 loosen r = mkRope $ runRope r . toARec
 {-# INLINE loosen #-}

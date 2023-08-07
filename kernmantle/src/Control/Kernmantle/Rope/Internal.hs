@@ -90,6 +90,9 @@ newtype RopeRunner (record::RopeRec) (mantle::[Strand]) (interp::BinEff) (core::
   deriving (EffFunctor, EffPointedFunctor)
     via Tannen ((->) (record (Weaver interp) mantle))
 
+instance Functor (core a) => Functor (RopeRunner record mantle interop core a) where
+    fmap f (RopeRunner run) = RopeRunner $ \record -> fmap f (run record)
+
 instance (RMap m) => EffProfunctor (RopeRunner Rec m) where
   effdimap f g (RopeRunner run) = RopeRunner $
     g . run . rmap (mapWeaverInterp f)
